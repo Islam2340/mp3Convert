@@ -217,10 +217,8 @@ public class MergeFragment extends Fragment {
                                         btnStartMerge.setEnabled(mergeItems.size() >= 2);
                                         cardResult.setVisibility(View.VISIBLE);
                                         tvResultInfo.setText(
-                                                "Готово! Соединено файлов: " + snapshot.size() + "
-" +
-                                                "Сохранено в Music/MP3Master/" + finalOutputName + ".mp3
-" +
+                                                "Готово! Соединено файлов: " + snapshot.size() + "\n" +
+                                                "Сохранено в Music/MP3Master/" + finalOutputName + ".mp3\n" +
                                                 "Размер: " + AudioUtils.formatSize(newSize) +
                                                 " (" + selectedBitrate + " кбит/с)"
                                         );

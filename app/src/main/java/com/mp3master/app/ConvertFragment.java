@@ -112,8 +112,7 @@ public class ConvertFragment extends Fragment {
         if (selectedAudio == null) return;
         String brText = selectedAudio.bitrateKbps > 0 ? (selectedAudio.bitrateKbps + " кбит/с") : "неизвестно";
         tvFileInfo.setText(
-                selectedAudio.displayName + "
-" +
+                selectedAudio.displayName + "\n" +
                 "Длительность: " + AudioUtils.formatTimeMs(selectedAudio.durationMs) +
                 "  •  Битрейт: " + brText +
                 "  •  Размер: " + AudioUtils.formatSize(selectedAudio.sizeBytes)
@@ -176,8 +175,7 @@ public class ConvertFragment extends Fragment {
                                         btnStartConvert.setEnabled(true);
                                         cardResult.setVisibility(View.VISIBLE);
                                         tvResultInfo.setText(
-                                                "Готово! Сохранено в Music/MP3Master/" + finalOutputName + ".mp3
-" +
+                                                "Готово! Сохранено в Music/MP3Master/" + finalOutputName + ".mp3\n" +
                                                 "Размер: " + AudioUtils.formatSize(selectedAudio.sizeBytes) +
                                                 " → " + AudioUtils.formatSize(newSize) +
                                                 " (" + selectedBitrate + " кбит/с)"

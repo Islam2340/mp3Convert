@@ -133,8 +133,7 @@ public class TrimFragment extends Fragment {
         float totalSec = Math.max(2f, selectedAudio.durationMs / 1000f);
 
         tvFileInfo.setText(
-                selectedAudio.displayName + "
-" +
+                selectedAudio.displayName + "\n" +
                 "Длительность: " + AudioUtils.formatTimeMs(selectedAudio.durationMs) +
                 "  •  Размер: " + AudioUtils.formatSize(selectedAudio.sizeBytes)
         );
@@ -297,8 +296,7 @@ public class TrimFragment extends Fragment {
                                         btnStartTrim.setEnabled(true);
                                         cardResult.setVisibility(View.VISIBLE);
                                         tvResultInfo.setText(
-                                                "Готово! Сохранено в Music/MP3Master/" + finalOutputName + ".mp3
-" +
+                                                "Готово! Сохранено в Music/MP3Master/" + finalOutputName + ".mp3\n" +
                                                 "Длительность: " + AudioUtils.formatTimeMs(clipDurationMs) +
                                                 "  •  Размер: " + AudioUtils.formatSize(newSize)
                                         );

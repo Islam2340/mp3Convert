@@ -94,7 +94,7 @@ public class AudioUtils {
 
     public static String sanitizeFileName(String name, String fallback) {
         if (name == null) return fallback;
-        String clean = name.trim().replaceAll("[\\/:*?"<>|]", "_");
+        String clean = name.trim().replaceAll("[\\\\/:*?\"<>|]", "_");
         if (clean.isEmpty()) return fallback;
         return clean;
     }
