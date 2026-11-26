@@ -1,10 +1,12 @@
 package com.mp3master.app;
 
+import android.app.Dialog;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -28,6 +30,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -75,6 +78,13 @@ public class MergeFragment extends Fragment {
         tvResultInfo = view.findViewById(R.id.tvMergeResultInfo);
 
         adapter = new MergeAdapter(mergeItems, new MergeAdapter.OnItemActionListener() {
+            @Override
+            public void onTrim(int position) {
+                if (position >= 0 && position < mergeItems.size()) {
+                    openTrimDialog(position);
+                }
+            }
+
             @Override
             public void onMoveUp(int position) {
                 if (position > 0) {
@@ -134,6 +144,49 @@ public class MergeFragment extends Fragment {
         return view;
     }
 
+    private void openTrimDialog(int position) {
+        if (getContext() == null) return;
+        AudioUtils.AudioInfo item = mergeItems.get(position);
+        if (item.durationMs < 1000) {
+            Toast.makeText(getContext(), "Файл слишком короткий для обрезки", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        Dialog dialog = new Dialog(requireContext());
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
+        View dialogView = LayoutInflater.from(requireContext()).inflate(R.layout.dialog_trim_item, null);
+        dialog.setContentView(dialogView);
+
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setLayout(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+            );
+        }
+
+        TextView tvTitle = dialogView.findViewById(R.id.tvDialogTitle);
+        TextView tvSub = dialogView.findViewById(R.id.tvDialogSubtitle);
+        tvTitle.setText(item.displayName);
+        tvSub.setText("Общая длина: " + AudioUtils.formatTimeMs(item.durationMs));
+
+        TrimEditorController controller = new TrimEditorController(requireContext(), dialogView);
+        long start = item.trimStartMs;
+        long end = item.trimEndMs > start ? item.trimEndMs : item.durationMs;
+        controller.bindAudio(item, start, end);
+
+        dialogView.findViewById(R.id.btnDialogReset).setOnClickListener(v -> controller.resetRange());
+        dialogView.findViewById(R.id.btnDialogCancel).setOnClickListener(v -> dialog.dismiss());
+        dialogView.findViewById(R.id.btnDialogApply).setOnClickListener(v -> {
+            item.trimStartMs = controller.getStartMs();
+            item.trimEndMs = controller.getEndMs();
+            adapter.notifyItemChanged(position);
+            dialog.dismiss();
+        });
+
+        dialog.setOnDismissListener(d -> controller.stopPlayback());
+        dialog.show();
+    }
+
     private void refreshListUi() {
         adapter.notifyDataSetChanged();
         boolean hasItems = !mergeItems.isEmpty();
@@ -155,7 +208,7 @@ public class MergeFragment extends Fragment {
 
         long totalDurMs = 0;
         for (AudioUtils.AudioInfo item : snapshot) {
-            totalDurMs += item.durationMs;
+            totalDurMs += item.getEffectiveDurationMs();
         }
         final long expectedDurationMs = totalDurMs;
 
@@ -179,9 +232,17 @@ public class MergeFragment extends Fragment {
                 StringBuilder filter = new StringBuilder();
                 StringBuilder concatInputs = new StringBuilder();
                 for (int i = 0; i < tempInputs.size(); i++) {
+                    AudioUtils.AudioInfo info = snapshot.get(i);
                     argsList.add("-i");
                     argsList.add(tempInputs.get(i).getAbsolutePath());
-                    filter.append("[").append(i).append(":a]aformat=sample_rates=44100:channel_layouts=stereo[a").append(i).append("];");
+
+                    filter.append("[").append(i).append(":a]");
+                    if (info.isTrimmed()) {
+                        String s = String.format(Locale.US, "%.3f", info.trimStartMs / 1000.0);
+                        String e = String.format(Locale.US, "%.3f", info.trimEndMs / 1000.0);
+                        filter.append("atrim=start=").append(s).append(":end=").append(e).append(",asetpts=PTS-STARTPTS,");
+                    }
+                    filter.append("aformat=sample_rates=44100:channel_layouts=stereo[a").append(i).append("];");
                     concatInputs.append("[a").append(i).append("]");
                 }
                 filter.append(concatInputs).append("concat=n=").append(tempInputs.size()).append(":v=0:a=1[out]");
@@ -219,7 +280,8 @@ public class MergeFragment extends Fragment {
                                         tvResultInfo.setText(
                                                 "Готово! Соединено файлов: " + snapshot.size() + "\n" +
                                                 "Сохранено в Music/MP3Master/" + finalOutputName + ".mp3\n" +
-                                                "Размер: " + AudioUtils.formatSize(newSize) +
+                                                "Длительность: " + AudioUtils.formatTimeMs(expectedDurationMs) +
+                                                "  •  Размер: " + AudioUtils.formatSize(newSize) +
                                                 " (" + selectedBitrate + " кбит/с)"
                                         );
                                     });

@@ -7,6 +7,7 @@ import android.widget.ImageButton;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
+import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.RecyclerView;
 
 import java.util.List;
@@ -14,6 +15,7 @@ import java.util.List;
 public class MergeAdapter extends RecyclerView.Adapter<MergeAdapter.ViewHolder> {
 
     public interface OnItemActionListener {
+        void onTrim(int position);
         void onMoveUp(int position);
         void onMoveDown(int position);
         void onRemove(int position);
@@ -39,15 +41,27 @@ public class MergeAdapter extends RecyclerView.Adapter<MergeAdapter.ViewHolder> 
         AudioUtils.AudioInfo info = items.get(position);
         holder.tvOrder.setText(String.valueOf(position + 1));
         holder.tvName.setText(info.displayName);
-        holder.tvMeta.setText(
-                AudioUtils.formatTimeMs(info.durationMs) + "  •  " + AudioUtils.formatSize(info.sizeBytes)
-        );
+
+        if (info.isTrimmed()) {
+            holder.tvMeta.setText(
+                    "Обрезан: " + AudioUtils.formatTimePreciseMs(info.trimStartMs) +
+                    " – " + AudioUtils.formatTimePreciseMs(info.trimEndMs) +
+                    " (" + AudioUtils.formatTimeMs(info.getEffectiveDurationMs()) + ")"
+            );
+            holder.tvMeta.setTextColor(ContextCompat.getColor(holder.itemView.getContext(), R.color.primary));
+        } else {
+            holder.tvMeta.setText(
+                    AudioUtils.formatTimeMs(info.durationMs) + "  •  " + AudioUtils.formatSize(info.sizeBytes)
+            );
+            holder.tvMeta.setTextColor(ContextCompat.getColor(holder.itemView.getContext(), R.color.text_secondary));
+        }
 
         holder.btnUp.setEnabled(position > 0);
         holder.btnUp.setAlpha(position > 0 ? 1f : 0.3f);
         holder.btnDown.setEnabled(position < items.size() - 1);
         holder.btnDown.setAlpha(position < items.size() - 1 ? 1f : 0.3f);
 
+        holder.btnTrim.setOnClickListener(v -> listener.onTrim(holder.getBindingAdapterPosition()));
         holder.btnUp.setOnClickListener(v -> listener.onMoveUp(holder.getBindingAdapterPosition()));
         holder.btnDown.setOnClickListener(v -> listener.onMoveDown(holder.getBindingAdapterPosition()));
         holder.btnRemove.setOnClickListener(v -> listener.onRemove(holder.getBindingAdapterPosition()));
@@ -60,13 +74,14 @@ public class MergeAdapter extends RecyclerView.Adapter<MergeAdapter.ViewHolder> 
 
     static class ViewHolder extends RecyclerView.ViewHolder {
         TextView tvOrder, tvName, tvMeta;
-        ImageButton btnUp, btnDown, btnRemove;
+        ImageButton btnTrim, btnUp, btnDown, btnRemove;
 
         ViewHolder(@NonNull View itemView) {
             super(itemView);
             tvOrder = itemView.findViewById(R.id.tvItemOrder);
             tvName = itemView.findViewById(R.id.tvItemName);
             tvMeta = itemView.findViewById(R.id.tvItemMeta);
+            btnTrim = itemView.findViewById(R.id.btnTrimItem);
             btnUp = itemView.findViewById(R.id.btnMoveUp);
             btnDown = itemView.findViewById(R.id.btnMoveDown);
             btnRemove = itemView.findViewById(R.id.btnRemoveItem);

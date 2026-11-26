@@ -1,10 +1,7 @@
 package com.mp3master.app;
 
-import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Bundle;
-import android.os.Handler;
-import android.os.Looper;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -23,11 +20,9 @@ import com.google.android.material.button.MaterialButton;
 import com.google.android.material.card.MaterialCardView;
 import com.google.android.material.materialswitch.MaterialSwitch;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
-import com.google.android.material.slider.RangeSlider;
 import com.google.android.material.textfield.TextInputEditText;
 
 import java.io.File;
-import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -36,41 +31,21 @@ public class TrimFragment extends Fragment {
 
     private AudioUtils.AudioInfo selectedAudio;
     private Uri lastSavedUri;
-    private MediaPlayer mediaPlayer;
-    private boolean isPlaying = false;
-    private final Handler handler = new Handler(Looper.getMainLooper());
+    private TrimEditorController editorController;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
-    private TextView tvFileInfo, tvStart, tvEnd, tvDuration, tvCurrentPos, tvStatus, tvResultInfo;
+    private TextView tvFileInfo, tvStatus, tvResultInfo;
     private MaterialCardView cardControls, cardResult;
-    private RangeSlider rangeSlider;
-    private MaterialButton btnPlayPause, btnStartTrim;
+    private MaterialButton btnStartTrim;
     private MaterialSwitch switchFast;
     private TextInputEditText etOutputName;
     private View layoutProgress;
     private LinearProgressIndicator progressBar;
 
-    private final Runnable playbackUpdater = new Runnable() {
-        @Override
-        public void run() {
-            if (mediaPlayer != null && isPlaying) {
-                int pos = mediaPlayer.getCurrentPosition();
-                tvCurrentPos.setText(AudioUtils.formatTimeMs(pos));
-                List<Float> vals = rangeSlider.getValues();
-                long endMs = Math.round(vals.get(1) * 1000f);
-                if (pos >= endMs) {
-                    stopPreview();
-                } else {
-                    handler.postDelayed(this, 200);
-                }
-            }
-        }
-    };
-
     private final ActivityResultLauncher<String[]> pickAudioLauncher =
             registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
                 if (uri != null && getContext() != null) {
-                    stopPreview();
+                    if (editorController != null) editorController.stopPlayback();
                     selectedAudio = AudioUtils.getAudioInfo(getContext(), uri);
                     setupTrimUi();
                 }
@@ -84,12 +59,6 @@ public class TrimFragment extends Fragment {
         MaterialButton btnPick = view.findViewById(R.id.btnPickTrimFile);
         tvFileInfo = view.findViewById(R.id.tvTrimFileInfo);
         cardControls = view.findViewById(R.id.cardTrimControls);
-        btnPlayPause = view.findViewById(R.id.btnTrimPlayPause);
-        tvCurrentPos = view.findViewById(R.id.tvTrimCurrentPos);
-        rangeSlider = view.findViewById(R.id.rangeSliderTrim);
-        tvStart = view.findViewById(R.id.tvTrimStart);
-        tvDuration = view.findViewById(R.id.tvTrimDuration);
-        tvEnd = view.findViewById(R.id.tvTrimEnd);
         switchFast = view.findViewById(R.id.switchTrimFast);
         etOutputName = view.findViewById(R.id.etTrimOutputName);
         btnStartTrim = view.findViewById(R.id.btnStartTrim);
@@ -99,16 +68,9 @@ public class TrimFragment extends Fragment {
         cardResult = view.findViewById(R.id.cardTrimResult);
         tvResultInfo = view.findViewById(R.id.tvTrimResultInfo);
 
+        editorController = new TrimEditorController(requireContext(), view);
+
         btnPick.setOnClickListener(v -> pickAudioLauncher.launch(new String[]{"audio/mpeg", "audio/*"}));
-        btnPlayPause.setOnClickListener(v -> togglePreview());
-
-        rangeSlider.addOnChangeListener((slider, value, fromUser) -> updateRangeLabels());
-
-        view.findViewById(R.id.btnStartMinus).setOnClickListener(v -> adjustRange(-1f, 0f));
-        view.findViewById(R.id.btnStartPlus).setOnClickListener(v -> adjustRange(1f, 0f));
-        view.findViewById(R.id.btnEndMinus).setOnClickListener(v -> adjustRange(0f, -1f));
-        view.findViewById(R.id.btnEndPlus).setOnClickListener(v -> adjustRange(0f, 1f));
-
         btnStartTrim.setOnClickListener(v -> startTrim());
 
         view.findViewById(R.id.btnTrimOpen).setOnClickListener(v -> {
@@ -130,7 +92,6 @@ public class TrimFragment extends Fragment {
             Toast.makeText(getContext(), "Файл слишком короткий или повреждён", Toast.LENGTH_SHORT).show();
             return;
         }
-        float totalSec = Math.max(2f, selectedAudio.durationMs / 1000f);
 
         tvFileInfo.setText(
                 selectedAudio.displayName + "\n" +
@@ -138,90 +99,22 @@ public class TrimFragment extends Fragment {
                 "  •  Размер: " + AudioUtils.formatSize(selectedAudio.sizeBytes)
         );
 
-        rangeSlider.setValueFrom(0f);
-        rangeSlider.setValueTo(totalSec);
-        rangeSlider.setValues(0f, totalSec);
-        updateRangeLabels();
-
+        editorController.bindAudio(selectedAudio, 0L, selectedAudio.durationMs);
         etOutputName.setText(AudioUtils.stripExtension(selectedAudio.displayName) + "_cut");
         cardControls.setVisibility(View.VISIBLE);
         btnStartTrim.setEnabled(true);
         cardResult.setVisibility(View.GONE);
     }
 
-    private void adjustRange(float deltaStart, float deltaEnd) {
-        if (selectedAudio == null) return;
-        List<Float> vals = rangeSlider.getValues();
-        float minVal = rangeSlider.getValueFrom();
-        float maxVal = rangeSlider.getValueTo();
-        float start = Math.max(minVal, Math.min(vals.get(0) + deltaStart, vals.get(1) - 1f));
-        float end = Math.min(maxVal, Math.max(vals.get(1) + deltaEnd, start + 1f));
-        rangeSlider.setValues(start, end);
-        updateRangeLabels();
-    }
-
-    private void updateRangeLabels() {
-        List<Float> vals = rangeSlider.getValues();
-        if (vals.size() < 2) return;
-        long startMs = Math.round(vals.get(0) * 1000f);
-        long endMs = Math.round(vals.get(1) * 1000f);
-        tvStart.setText("Начало: " + AudioUtils.formatTimeMs(startMs));
-        tvEnd.setText("Конец: " + AudioUtils.formatTimeMs(endMs));
-        tvDuration.setText("Длина: " + AudioUtils.formatTimeMs(Math.max(0, endMs - startMs)));
-    }
-
-    private void togglePreview() {
-        if (isPlaying) {
-            stopPreview();
-            return;
-        }
-        if (selectedAudio == null || getContext() == null) return;
-        try {
-            List<Float> vals = rangeSlider.getValues();
-            int startMs = Math.round(vals.get(0) * 1000f);
-
-            mediaPlayer = new MediaPlayer();
-            mediaPlayer.setDataSource(getContext(), selectedAudio.uri);
-            mediaPlayer.prepare();
-            mediaPlayer.seekTo(startMs);
-            mediaPlayer.start();
-            isPlaying = true;
-            btnPlayPause.setText("Пауза");
-            btnPlayPause.setIconResource(R.drawable.ic_pause);
-            handler.post(playbackUpdater);
-        } catch (Exception e) {
-            Toast.makeText(getContext(), "Не удалось воспроизвести: " + e.getMessage(), Toast.LENGTH_SHORT).show();
-            stopPreview();
-        }
-    }
-
-    private void stopPreview() {
-        isPlaying = false;
-        handler.removeCallbacks(playbackUpdater);
-        if (mediaPlayer != null) {
-            try {
-                if (mediaPlayer.isPlaying()) mediaPlayer.stop();
-                mediaPlayer.release();
-            } catch (Exception ignored) {
-            }
-            mediaPlayer = null;
-        }
-        if (btnPlayPause != null) {
-            btnPlayPause.setText("Прослушать отрезок");
-            btnPlayPause.setIconResource(R.drawable.ic_play);
-        }
-    }
-
     private void startTrim() {
         if (selectedAudio == null || getContext() == null) return;
-        stopPreview();
+        editorController.stopPlayback();
 
-        List<Float> vals = rangeSlider.getValues();
-        float startSec = vals.get(0);
-        float endSec = vals.get(1);
-        long clipDurationMs = Math.round((endSec - startSec) * 1000f);
-        if (clipDurationMs < 500) {
-            Toast.makeText(getContext(), "Выберите отрезок длиннее 0.5 сек", Toast.LENGTH_SHORT).show();
+        long startMs = editorController.getStartMs();
+        long endMs = editorController.getEndMs();
+        long clipDurationMs = endMs - startMs;
+        if (clipDurationMs < 300) {
+            Toast.makeText(getContext(), "Выберите отрезок длиннее 0.3 сек", Toast.LENGTH_SHORT).show();
             return;
         }
 
@@ -245,8 +138,8 @@ public class TrimFragment extends Fragment {
                 inputTemp = AudioUtils.copyUriToCache(requireContext(), selectedAudio.uri, "trim_in");
                 outputTemp = new File(requireContext().getCacheDir(), "trim_out_" + System.currentTimeMillis() + ".mp3");
 
-                String startStr = String.format(Locale.US, "%.2f", startSec);
-                String endStr = String.format(Locale.US, "%.2f", endSec);
+                String startStr = String.format(Locale.US, "%.3f", startMs / 1000.0);
+                String endStr = String.format(Locale.US, "%.3f", endMs / 1000.0);
 
                 String[] args;
                 if (fastCopy) {
@@ -297,7 +190,7 @@ public class TrimFragment extends Fragment {
                                         cardResult.setVisibility(View.VISIBLE);
                                         tvResultInfo.setText(
                                                 "Готово! Сохранено в Music/MP3Master/" + finalOutputName + ".mp3\n" +
-                                                "Длительность: " + AudioUtils.formatTimeMs(clipDurationMs) +
+                                                "Длительность: " + AudioUtils.formatTimePreciseMs(clipDurationMs) +
                                                 "  •  Размер: " + AudioUtils.formatSize(newSize)
                                         );
                                     });
@@ -347,14 +240,14 @@ public class TrimFragment extends Fragment {
     @Override
     public void onPause() {
         super.onPause();
-        stopPreview();
+        if (editorController != null) editorController.stopPlayback();
     }
 
     @Override
     public void onHiddenChanged(boolean hidden) {
         super.onHiddenChanged(hidden);
-        if (hidden) {
-            stopPreview();
+        if (hidden && editorController != null) {
+            editorController.stopPlayback();
         }
     }
 }
