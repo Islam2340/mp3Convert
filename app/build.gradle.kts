@@ -35,5 +35,5 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.activity:activity-compose:1.9.2")
     // FFmpeg со встроенным кодировщиком LAME (mp3)
-    implementation("com.arthenica:ffmpeg-kit-audio:6.0-2")
+    implementation("com.antonkarpenko:ffmpeg-kit-full:2.1.0")
 }
