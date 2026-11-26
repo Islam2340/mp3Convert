@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MP3 Мастер</string>
+    <string name="tab_convert">Качество</string>
+    <string name="tab_trim">Обрезка</string>
+    <string name="tab_merge">Соединить</string>
+</resources>

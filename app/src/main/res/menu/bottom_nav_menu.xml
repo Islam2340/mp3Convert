@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/nav_convert"
+        android:icon="@drawable/ic_tune"
+        android:title="@string/tab_convert" />
+    <item
+        android:id="@+id/nav_trim"
+        android:icon="@drawable/ic_cut"
+        android:title="@string/tab_trim" />
+    <item
+        android:id="@+id/nav_merge"
+        android:icon="@drawable/ic_merge"
+        android:title="@string/tab_merge" />
+</menu>
