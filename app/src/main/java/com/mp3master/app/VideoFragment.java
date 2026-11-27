@@ -29,6 +29,7 @@ import androidx.annotation.Nullable;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 import androidx.recyclerview.widget.LinearLayoutManager;
+import androidx.recyclerview.widget.ItemTouchHelper;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.arthenica.ffmpegkit.FFmpegKit;
@@ -42,7 +43,9 @@ import com.google.android.material.slider.Slider;
 import com.google.android.material.textfield.TextInputEditText;
 
 import java.io.File;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
@@ -68,7 +71,19 @@ public class VideoFragment extends Fragment {
     private static final int AUDIO_MIX = 3;
 
     // Retained across theme switches (Activity recreation)
+    private static class UndoState {
+        final List<AudioUtils.VideoInfo> snapshot;
+        final int activeIdx;
+
+        UndoState(List<AudioUtils.VideoInfo> src, int idx) {
+            this.snapshot = new ArrayList<>();
+            for (AudioUtils.VideoInfo c : src) this.snapshot.add(c.copy());
+            this.activeIdx = idx;
+        }
+    }
+
     private static final List<AudioUtils.VideoInfo> clips = new ArrayList<>();
+    private static final Deque<UndoState> undoStack = new ArrayDeque<>();
     private static int activeClipIndex = 0;
     private static Uri customAudioUri;
     private static String customAudioName;
@@ -118,7 +133,7 @@ public class VideoFragment extends Fragment {
     private ChipGroup chipGroupRotate;
     private MaterialSwitch switchFlipH, switchFlipV;
     private TextInputEditText etOutputName;
-    private MaterialButton btnQuickPlay, btnStartExport, btnExtractMp3, btnCancel;
+    private MaterialButton btnQuickPlay, btnVideoUndo, btnStartExport, btnExtractMp3, btnCancel;
     private LinearProgressIndicator progressBar;
 
     private final Runnable previewUpdater = new Runnable() {
@@ -150,6 +165,7 @@ public class VideoFragment extends Fragment {
                 if (uris != null && !uris.isEmpty() && getContext() != null) {
                     pauseVideoPreview();
                     boolean wasEmpty = clips.isEmpty();
+                    if (!clips.isEmpty()) pushUndoState();
                     for (Uri uri : uris) {
                         AudioUtils.VideoInfo vi = AudioUtils.getVideoInfo(getContext(), uri);
                         if (vi.durationMs >= 300) {
@@ -224,6 +240,9 @@ public class VideoFragment extends Fragment {
         etOutputName = view.findViewById(R.id.etVideoOutputName);
 
         btnQuickPlay = view.findViewById(R.id.btnQuickPlay);
+        btnVideoUndo = view.findViewById(R.id.btnVideoUndo);
+        view.findViewById(R.id.btnQuickSplit).setOnClickListener(v -> splitActiveClipAtPlayhead());
+        btnVideoUndo.setOnClickListener(v -> performUndo());
         btnStartExport = view.findViewById(R.id.btnStartVideoExport);
         btnExtractMp3 = view.findViewById(R.id.btnExtractMp3FromVideo);
         layoutProgress = view.findViewById(R.id.layoutVideoProgress);
@@ -245,6 +264,26 @@ public class VideoFragment extends Fragment {
         });
         rvTimeline.setLayoutManager(new LinearLayoutManager(getContext(), LinearLayoutManager.HORIZONTAL, false));
         rvTimeline.setAdapter(clipAdapter);
+
+        ItemTouchHelper.SimpleCallback swipeToDeleteCallback = new ItemTouchHelper.SimpleCallback(
+                0, ItemTouchHelper.UP | ItemTouchHelper.DOWN
+        ) {
+            @Override
+            public boolean onMove(@NonNull RecyclerView recyclerView,
+                                  @NonNull RecyclerView.ViewHolder viewHolder,
+                                  @NonNull RecyclerView.ViewHolder target) {
+                return false;
+            }
+
+            @Override
+            public void onSwiped(@NonNull RecyclerView.ViewHolder viewHolder, int direction) {
+                int pos = viewHolder.getBindingAdapterPosition();
+                if (pos >= 0 && pos < clips.size()) {
+                    deleteClipAt(pos);
+                }
+            }
+        };
+        new ItemTouchHelper(swipeToDeleteCallback).attachToRecyclerView(rvTimeline);
 
         // Pickers
         view.findViewById(R.id.btnPickInitialVideos).setOnClickListener(v ->
@@ -309,6 +348,7 @@ public class VideoFragment extends Fragment {
         view.findViewById(R.id.btnClipMoveLeft).setOnClickListener(v -> {
             if (activeClipIndex > 0) {
                 pauseVideoPreview();
+                pushUndoState();
                 Collections.swap(clips, activeClipIndex, activeClipIndex - 1);
                 activeClipIndex--;
                 refreshWorkspace();
@@ -317,6 +357,7 @@ public class VideoFragment extends Fragment {
         view.findViewById(R.id.btnClipMoveRight).setOnClickListener(v -> {
             if (activeClipIndex < clips.size() - 1) {
                 pauseVideoPreview();
+                pushUndoState();
                 Collections.swap(clips, activeClipIndex, activeClipIndex + 1);
                 activeClipIndex++;
                 refreshWorkspace();
@@ -324,10 +365,7 @@ public class VideoFragment extends Fragment {
         });
         view.findViewById(R.id.btnClipRemove).setOnClickListener(v -> {
             if (!clips.isEmpty() && activeClipIndex >= 0 && activeClipIndex < clips.size()) {
-                pauseVideoPreview();
-                clips.remove(activeClipIndex);
-                if (activeClipIndex >= clips.size()) activeClipIndex = Math.max(0, clips.size() - 1);
-                refreshWorkspace();
+                deleteClipAt(activeClipIndex);
             }
         });
 
@@ -488,15 +526,54 @@ public class VideoFragment extends Fragment {
         }
     }
 
+    private void pushUndoState() {
+        if (undoStack.size() >= 25) {
+            undoStack.removeLast();
+        }
+        undoStack.push(new UndoState(clips, activeClipIndex));
+        updateUndoButton();
+    }
+
+    private void updateUndoButton() {
+        if (btnVideoUndo != null) {
+            btnVideoUndo.setEnabled(!undoStack.isEmpty());
+        }
+    }
+
+    private void performUndo() {
+        if (undoStack.isEmpty()) return;
+        pauseVideoPreview();
+        UndoState prev = undoStack.pop();
+        clips.clear();
+        clips.addAll(prev.snapshot);
+        activeClipIndex = Math.max(0, Math.min(prev.activeIdx, Math.max(0, clips.size() - 1)));
+        refreshWorkspace();
+        updateUndoButton();
+        Toast.makeText(getContext(), "Действие отменено", Toast.LENGTH_SHORT).show();
+    }
+
+    private void deleteClipAt(int pos) {
+        if (pos < 0 || pos >= clips.size()) return;
+        pauseVideoPreview();
+        pushUndoState();
+        clips.remove(pos);
+        if (activeClipIndex >= clips.size()) {
+            activeClipIndex = Math.max(0, clips.size() - 1);
+        }
+        refreshWorkspace();
+        Toast.makeText(getContext(), "Кусок удалён (можно вернуть кнопкой «Назад»)", Toast.LENGTH_SHORT).show();
+    }
+
     private void splitActiveClipAtPlayhead() {
         AudioUtils.VideoInfo clip = getActiveClip();
         if (clip == null) return;
         pauseVideoPreview();
         long pos = videoFilmstrip.getPlayheadMs();
-        if (pos <= clip.trimStartMs + 300L || pos >= clip.trimEndMs - 300L) {
-            Toast.makeText(getContext(), "Переместите белый курсор внутрь клипа для разделения", Toast.LENGTH_SHORT).show();
+        if (pos <= clip.trimStartMs + 150L || pos >= clip.trimEndMs - 150L) {
+            Toast.makeText(getContext(), "Нажмите на нужное место внутри ленты кадров, затем «Отрезать»", Toast.LENGTH_SHORT).show();
             return;
         }
+        pushUndoState();
         AudioUtils.VideoInfo rightPart = clip.copy();
         rightPart.trimStartMs = pos;
         rightPart.trimEndMs = clip.trimEndMs;
@@ -505,7 +582,7 @@ public class VideoFragment extends Fragment {
         clips.add(activeClipIndex + 1, rightPart);
         activeClipIndex = activeClipIndex + 1;
         refreshWorkspace();
-        Toast.makeText(getContext(), "Клип разделён! Удалите ненужный кусок кнопкой «Удалить клип»", Toast.LENGTH_SHORT).show();
+        Toast.makeText(getContext(), "Отрезано! Смахните ненужный кусок вверх/вниз для удаления", Toast.LENGTH_SHORT).show();
     }
 
     private void setupTextureView() {
@@ -743,6 +820,7 @@ public class VideoFragment extends Fragment {
                 ? ("Сохранить видео (" + clips.size() + " клипов)")
                 : "Сохранить видео MP4");
         updateTotalDurationHeader();
+        updateUndoButton();
         bindActiveClip();
     }
 
