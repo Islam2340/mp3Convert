@@ -5,6 +5,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -27,9 +30,25 @@ jobs:
       - name: Build Debug APK
         run: gradle assembleDebug --no-daemon
 
+      - name: Extract versionName
+        id: ver
+        run: |
+          VER=$(sed -n 's/.*versionName[[:space:]]*"\([^"]*\)".*/\1/p' app/build.gradle | head -n 1)
+          if [ -z "$VER" ]; then VER="2.5"; fi
+          echo "version=$VER" >> $GITHUB_OUTPUT
+          cp app/build/outputs/apk/debug/app-debug.apk MP3-MP4-Master.apk
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: MP3Master-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: MP3/MP4 Мастер v${{ steps.ver.outputs.version }}
+          files: MP3-MP4-Master.apk
+          make_latest: true
