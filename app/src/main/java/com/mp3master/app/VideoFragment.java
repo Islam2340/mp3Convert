@@ -121,6 +121,8 @@ public class VideoFragment extends Fragment {
     private Slider sliderOrigVolume, sliderCustomVolume;
     private View panelTrim, panelRotate, panelFormat, panelAudio, panelSpeed, panelQuality;
     private ImageView iconToolTrim, iconToolRotate, iconToolFormat, iconToolAudio, iconToolSpeed, iconToolQuality;
+    private View previewOuterBox, previewCanvasBox;
+    private ImageView ivPreviewBlurBg;
     private TextureView texturePreview;
     private VideoFilmstripView videoFilmstrip;
     private ImageButton btnCenterPlayPause;
@@ -196,7 +198,11 @@ public class VideoFragment extends Fragment {
 
         cardEmpty = view.findViewById(R.id.cardVideoEmpty);
         layoutWorkspace = view.findViewById(R.id.layoutVideoWorkspace);
+        previewOuterBox = view.findViewById(R.id.previewOuterBox);
+        previewCanvasBox = view.findViewById(R.id.previewCanvasBox);
+        ivPreviewBlurBg = view.findViewById(R.id.ivPreviewBlurBg);
         texturePreview = view.findViewById(R.id.textureVideoPreview);
+        texturePreview.setOpaque(false);
         videoFilmstrip = view.findViewById(R.id.videoFilmstrip);
         btnCenterPlayPause = view.findViewById(R.id.btnCenterPlayPause);
         tvActiveClipName = view.findViewById(R.id.tvActiveClipName);
@@ -363,6 +369,7 @@ public class VideoFragment extends Fragment {
             else if (id == R.id.chipAspect11) aspectMode = ASPECT_1_1;
             else if (id == R.id.chipAspect45) aspectMode = ASPECT_4_5;
             layoutFillMode.setVisibility(aspectMode == ASPECT_ORIG ? View.GONE : View.VISIBLE);
+            applyTextureTransform();
         });
 
         ChipGroup fillGroup = view.findViewById(R.id.chipGroupVideoFill);
@@ -372,6 +379,7 @@ public class VideoFragment extends Fragment {
             if (id == R.id.chipFillBlur) fillMode = FILL_BLUR;
             else if (id == R.id.chipFillCrop) fillMode = FILL_CROP;
             else if (id == R.id.chipFillPad) fillMode = FILL_PAD;
+            applyTextureTransform();
         });
 
         // Audio + Volume sliders
@@ -670,37 +678,79 @@ public class VideoFragment extends Fragment {
     }
 
     private void applyTextureTransform() {
-        if (texturePreview == null) return;
-        int viewW = texturePreview.getWidth();
-        int viewH = texturePreview.getHeight();
+        if (texturePreview == null || previewOuterBox == null || previewCanvasBox == null) return;
+        int outerW = previewOuterBox.getWidth();
+        int outerH = previewOuterBox.getHeight();
         AudioUtils.VideoInfo clip = getActiveClip();
-        if (viewW <= 0 || viewH <= 0 || videoNaturalW <= 0 || videoNaturalH <= 0 || clip == null) return;
+        if (outerW <= 0 || outerH <= 0 || videoNaturalW <= 0 || videoNaturalH <= 0 || clip == null) return;
 
         int rot = clip.extraRotateDeg;
         float vidW = (rot == 90 || rot == 270) ? videoNaturalH : videoNaturalW;
         float vidH = (rot == 90 || rot == 270) ? videoNaturalW : videoNaturalH;
 
-        float scale = Math.min(viewW / vidW, viewH / vidH);
+        // 1. Compute target canvas aspect ratio
+        float targetAspect;
+        String aspectLabel = "";
+        if (aspectMode == ASPECT_16_9) { targetAspect = 16f / 9f; aspectLabel = "16:9"; }
+        else if (aspectMode == ASPECT_9_16) { targetAspect = 9f / 16f; aspectLabel = "9:16"; }
+        else if (aspectMode == ASPECT_1_1) { targetAspect = 1f; aspectLabel = "1:1"; }
+        else if (aspectMode == ASPECT_4_5) { targetAspect = 4f / 5f; aspectLabel = "4:5"; }
+        else { targetAspect = vidW / Math.max(1f, vidH); }
+
+        int canvasW, canvasH;
+        if (outerW / (float) outerH > targetAspect) {
+            canvasH = outerH;
+            canvasW = Math.max(1, Math.round(outerH * targetAspect));
+        } else {
+            canvasW = outerW;
+            canvasH = Math.max(1, Math.round(outerW / targetAspect));
+        }
+
+        ViewGroup.LayoutParams lp = previewCanvasBox.getLayoutParams();
+        if (lp.width != canvasW || lp.height != canvasH) {
+            lp.width = canvasW;
+            lp.height = canvasH;
+            previewCanvasBox.setLayoutParams(lp);
+        }
+
+        // 2. Show blurred background only for Blur fill mode with custom aspect
+        boolean showBlur = (aspectMode != ASPECT_ORIG && fillMode == FILL_BLUR);
+        if (ivPreviewBlurBg != null) {
+            ivPreviewBlurBg.setVisibility(showBlur ? View.VISIBLE : View.GONE);
+            ivPreviewBlurBg.setRotation(rot);
+            ivPreviewBlurBg.setScaleX(clip.flipH ? -1f : 1f);
+            ivPreviewBlurBg.setScaleY(clip.flipV ? -1f : 1f);
+        }
+
+        // 3. Compute exact Matrix inside canvasW x canvasH
+        boolean isCrop = (aspectMode != ASPECT_ORIG && fillMode == FILL_CROP);
+        float scale = isCrop
+                ? Math.max(canvasW / vidW, canvasH / vidH)
+                : Math.min(canvasW / vidW, canvasH / vidH);
+
         float scaledW = videoNaturalW * scale;
         float scaledH = videoNaturalH * scale;
 
-        float sx = (scaledW / viewW) * (clip.flipH ? -1f : 1f);
-        float sy = (scaledH / viewH) * (clip.flipV ? -1f : 1f);
+        float sx = (scaledW / canvasW) * (clip.flipH ? -1f : 1f);
+        float sy = (scaledH / canvasH) * (clip.flipV ? -1f : 1f);
 
         Matrix matrix = new Matrix();
-        float cx = viewW / 2f;
-        float cy = viewH / 2f;
+        float cx = canvasW / 2f;
+        float cy = canvasH / 2f;
         matrix.setScale(sx, sy, cx, cy);
         if (rot != 0) {
             matrix.postRotate(rot, cx, cy);
         }
         texturePreview.setTransform(matrix);
+        texturePreview.invalidate();
 
-        if (rot != 0 || clip.flipH || clip.flipV) {
-            StringBuilder b = new StringBuilder();
-            if (rot != 0) b.append(rot).append("°");
-            if (clip.flipH) { if (b.length() > 0) b.append(" "); b.append("↔"); }
-            if (clip.flipV) { if (b.length() > 0) b.append(" "); b.append("↕"); }
+        // 4. Update badge
+        StringBuilder b = new StringBuilder();
+        if (!aspectLabel.isEmpty()) b.append(aspectLabel);
+        if (rot != 0) { if (b.length() > 0) b.append(" • "); b.append(rot).append("°"); }
+        if (clip.flipH) { if (b.length() > 0) b.append(" "); b.append("↔"); }
+        if (clip.flipV) { if (b.length() > 0) b.append(" "); b.append("↕"); }
+        if (b.length() > 0) {
             tvVideoPreviewBadge.setText(b.toString());
             tvVideoPreviewBadge.setVisibility(View.VISIBLE);
         } else {
@@ -740,7 +790,14 @@ public class VideoFragment extends Fragment {
                 }
             }
             if (!result.isEmpty()) {
-                runUi(() -> videoFilmstrip.putFramesForUri(uriKey, result));
+                final Bitmap blurSample = Bitmap.createScaledBitmap(result.get(0), 18, 18, true);
+                runUi(() -> {
+                    videoFilmstrip.putFramesForUri(uriKey, result);
+                    AudioUtils.VideoInfo cur = getActiveClip();
+                    if (cur != null && cur.uri.toString().equals(uriKey) && ivPreviewBlurBg != null) {
+                        ivPreviewBlurBg.setImageBitmap(blurSample);
+                    }
+                });
             }
         });
     }
