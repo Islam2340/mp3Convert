@@ -114,9 +114,9 @@
                     android:layout_width="match_parent"
                     android:layout_height="match_parent">
 
-                    <VideoView
-                        android:id="@+id/videoViewPreview"
-                        android:layout_width="wrap_content"
+                    <TextureView
+                        android:id="@+id/textureVideoPreview"
+                        android:layout_width="match_parent"
                         android:layout_height="match_parent"
                         android:layout_gravity="center" />
 
@@ -188,9 +188,16 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:gravity="center"
-                android:text="00:00 — 00:00"
+                android:text="00:00.0 / 00:00.0"
                 android:textColor="@color/text_secondary"
                 android:textSize="12sp" />
+
+            <!-- Movavi-style Filmstrip Trimmer with real frames + orange handles + white playhead -->
+            <com.mp3master.app.VideoFilmstripView
+                android:id="@+id/videoFilmstrip"
+                android:layout_width="match_parent"
+                android:layout_height="68dp"
+                android:layout_marginTop="4dp" />
 
             <!-- Horizontal Filmstrip Timeline (Clips one after another + Add button) -->
             <LinearLayout
@@ -530,21 +537,6 @@
                         android:layout_height="wrap_content"
                         android:orientation="vertical">
 
-                        <TextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="Обрезка выбранного клипа"
-                            android:textColor="@color/text_primary"
-                            android:textSize="13sp"
-                            android:textStyle="bold" />
-
-                        <com.google.android.material.slider.RangeSlider
-                            android:id="@+id/rangeSliderVideo"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            app:thumbColor="@color/accent_orange"
-                            app:trackColorActive="@color/accent_orange" />
-
                         <LinearLayout
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
@@ -555,7 +547,7 @@
                                 android:layout_width="0dp"
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
-                                android:text="Начало: 00:00"
+                                android:text="Начало: 00:00.0"
                                 android:textColor="@color/text_secondary"
                                 android:textSize="12sp" />
 
@@ -565,7 +557,7 @@
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
                                 android:gravity="center"
-                                android:text="Длина: 00:00"
+                                android:text="Длина: 00:00.0"
                                 android:textColor="@color/accent_orange"
                                 android:textSize="12sp"
                                 android:textStyle="bold" />
@@ -576,8 +568,38 @@
                                 android:layout_height="wrap_content"
                                 android:layout_weight="1"
                                 android:gravity="end"
-                                android:text="Конец: 00:00"
+                                android:text="Конец: 00:00.0"
                                 android:textColor="@color/text_secondary"
+                                android:textSize="12sp" />
+                        </LinearLayout>
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:orientation="horizontal">
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnVidSetStartHere"
+                                style="@style/Widget.Material3.Button.TonalButton"
+                                android:layout_width="0dp"
+                                android:layout_height="36dp"
+                                android:layout_marginEnd="6dp"
+                                android:layout_weight="1"
+                                android:insetTop="0dp"
+                                android:insetBottom="0dp"
+                                android:text="Начало здесь"
+                                android:textSize="12sp" />
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/btnVidSetEndHere"
+                                style="@style/Widget.Material3.Button.TonalButton"
+                                android:layout_width="0dp"
+                                android:layout_height="36dp"
+                                android:layout_weight="1"
+                                android:insetTop="0dp"
+                                android:insetBottom="0dp"
+                                android:text="Конец здесь"
                                 android:textSize="12sp" />
                         </LinearLayout>
                     </LinearLayout>
