@@ -24,6 +24,7 @@ public class MainActivity extends AppCompatActivity {
     private Fragment convertFragment;
     private Fragment trimFragment;
     private Fragment mergeFragment;
+    private Fragment replaceFragment;
     private Fragment activeFragment;
 
     private TextView tvSaveFolderPath;
@@ -70,9 +71,11 @@ public class MainActivity extends AppCompatActivity {
             convertFragment = new ConvertFragment();
             trimFragment = new TrimFragment();
             mergeFragment = new MergeFragment();
+            replaceFragment = new ReplaceFragment();
             activeFragment = convertFragment;
 
             fm.beginTransaction()
+                    .add(R.id.fragmentContainer, replaceFragment, "replace").hide(replaceFragment)
                     .add(R.id.fragmentContainer, mergeFragment, "merge").hide(mergeFragment)
                     .add(R.id.fragmentContainer, trimFragment, "trim").hide(trimFragment)
                     .add(R.id.fragmentContainer, convertFragment, "convert")
@@ -82,9 +85,11 @@ public class MainActivity extends AppCompatActivity {
             convertFragment = fm.findFragmentByTag("convert");
             trimFragment = fm.findFragmentByTag("trim");
             mergeFragment = fm.findFragmentByTag("merge");
+            replaceFragment = fm.findFragmentByTag("replace");
             if (convertFragment == null) convertFragment = new ConvertFragment();
             if (trimFragment == null) trimFragment = new TrimFragment();
             if (mergeFragment == null) mergeFragment = new MergeFragment();
+            if (replaceFragment == null) replaceFragment = new ReplaceFragment();
 
             if (!trimFragment.isHidden()) {
                 activeFragment = trimFragment;
@@ -92,6 +97,9 @@ public class MainActivity extends AppCompatActivity {
             } else if (!mergeFragment.isHidden()) {
                 activeFragment = mergeFragment;
                 toolbar.setTitle("Соединение MP3");
+            } else if (!replaceFragment.isHidden()) {
+                activeFragment = replaceFragment;
+                toolbar.setTitle("Замена фрагмента");
             } else {
                 activeFragment = convertFragment;
                 toolbar.setTitle("Изменение качества MP3");
@@ -108,6 +116,9 @@ public class MainActivity extends AppCompatActivity {
                 return true;
             } else if (id == R.id.nav_merge) {
                 switchFragment(mergeFragment, "Соединение MP3");
+                return true;
+            } else if (id == R.id.nav_replace) {
+                switchFragment(replaceFragment, "Замена фрагмента");
                 return true;
             }
             return false;
