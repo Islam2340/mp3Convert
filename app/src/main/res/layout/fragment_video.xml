@@ -192,14 +192,7 @@
                 android:textColor="@color/text_secondary"
                 android:textSize="12sp" />
 
-            <!-- Movavi-style Filmstrip Trimmer with real frames + orange handles + white playhead -->
-            <com.mp3master.app.VideoFilmstripView
-                android:id="@+id/videoFilmstrip"
-                android:layout_width="match_parent"
-                android:layout_height="68dp"
-                android:layout_marginTop="4dp" />
-
-            <!-- Horizontal Filmstrip Timeline (Clips one after another + Add button) -->
+            <!-- Unified Movavi-style Multi-Clip Filmstrip + Add button -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -207,19 +200,17 @@
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 
-                <androidx.recyclerview.widget.RecyclerView
-                    android:id="@+id/rvVideoTimeline"
+                <com.mp3master.app.VideoFilmstripView
+                    android:id="@+id/videoFilmstrip"
                     android:layout_width="0dp"
-                    android:layout_height="72dp"
-                    android:layout_weight="1"
-                    android:clipToPadding="false"
-                    android:orientation="horizontal" />
+                    android:layout_height="76dp"
+                    android:layout_weight="1" />
 
                 <ImageButton
                     android:id="@+id/btnAddMoreVideos"
-                    android:layout_width="52dp"
-                    android:layout_height="68dp"
-                    android:layout_marginStart="4dp"
+                    android:layout_width="46dp"
+                    android:layout_height="64dp"
+                    android:layout_marginStart="6dp"
                     android:background="@drawable/bg_clip_normal"
                     android:contentDescription="Добавить клип"
                     android:src="@drawable/ic_add"
@@ -564,89 +555,77 @@
                     android:orientation="vertical"
                     android:padding="12dp">
 
-                    <!-- Panel 1: Trim active clip -->
+                    <!-- Panel 1: Compact Trim bar with icon buttons for Start Here / End Here -->
                     <LinearLayout
                         android:id="@+id/panelTrim"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:orientation="vertical">
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <ImageButton
+                            android:id="@+id/btnVidSetStartHere"
+                            android:layout_width="38dp"
+                            android:layout_height="38dp"
+                            android:background="@drawable/bg_tool_circle"
+                            android:contentDescription="Начало здесь"
+                            android:padding="8dp"
+                            android:src="@drawable/ic_trim_start"
+                            app:tint="@color/primary" />
 
                         <LinearLayout
-                            android:layout_width="match_parent"
+                            android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:orientation="horizontal">
-
-                            <TextView
-                                android:id="@+id/tvVideoStart"
-                                android:layout_width="0dp"
-                                android:layout_height="wrap_content"
-                                android:layout_weight="1"
-                                android:text="Начало: 00:00.0"
-                                android:textColor="@color/text_secondary"
-                                android:textSize="12sp" />
+                            android:layout_marginHorizontal="8dp"
+                            android:layout_weight="1"
+                            android:gravity="center"
+                            android:orientation="vertical">
 
                             <TextView
                                 android:id="@+id/tvVideoDuration"
-                                android:layout_width="0dp"
+                                android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
-                                android:layout_weight="1"
-                                android:gravity="center"
                                 android:text="Длина: 00:00.0"
-                                android:textColor="@color/accent_orange"
-                                android:textSize="12sp"
+                                android:textColor="@color/primary"
+                                android:textSize="13sp"
                                 android:textStyle="bold" />
 
-                            <TextView
-                                android:id="@+id/tvVideoEnd"
-                                android:layout_width="0dp"
+                            <LinearLayout
+                                android:layout_width="match_parent"
                                 android:layout_height="wrap_content"
-                                android:layout_weight="1"
-                                android:gravity="end"
-                                android:text="Конец: 00:00.0"
-                                android:textColor="@color/text_secondary"
-                                android:textSize="12sp" />
+                                android:layout_marginTop="2dp"
+                                android:orientation="horizontal">
+
+                                <TextView
+                                    android:id="@+id/tvVideoStart"
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:text="00:00.0"
+                                    android:textColor="@color/text_secondary"
+                                    android:textSize="11sp" />
+
+                                <TextView
+                                    android:id="@+id/tvVideoEnd"
+                                    android:layout_width="0dp"
+                                    android:layout_height="wrap_content"
+                                    android:layout_weight="1"
+                                    android:gravity="end"
+                                    android:text="00:00.0"
+                                    android:textColor="@color/text_secondary"
+                                    android:textSize="11sp" />
+                            </LinearLayout>
                         </LinearLayout>
 
-                        <LinearLayout
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="8dp"
-                            android:orientation="horizontal">
-
-                            <com.google.android.material.button.MaterialButton
-                                android:id="@+id/btnVidSetStartHere"
-                                style="@style/Widget.Material3.Button.TonalButton"
-                                android:layout_width="0dp"
-                                android:layout_height="36dp"
-                                android:layout_marginEnd="6dp"
-                                android:layout_weight="1"
-                                android:insetTop="0dp"
-                                android:insetBottom="0dp"
-                                android:text="Начало здесь"
-                                android:textSize="12sp" />
-
-                            <com.google.android.material.button.MaterialButton
-                                android:id="@+id/btnVidSetEndHere"
-                                style="@style/Widget.Material3.Button.TonalButton"
-                                android:layout_width="0dp"
-                                android:layout_height="36dp"
-                                android:layout_weight="1"
-                                android:insetTop="0dp"
-                                android:insetBottom="0dp"
-                                android:text="Конец здесь"
-                                android:textSize="12sp" />
-                        </LinearLayout>
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnSplitClipHere"
-                            style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="match_parent"
+                        <ImageButton
+                            android:id="@+id/btnVidSetEndHere"
+                            android:layout_width="38dp"
                             android:layout_height="38dp"
-                            android:layout_marginTop="8dp"
-                            android:insetTop="0dp"
-                            android:insetBottom="0dp"
-                            android:text="Разделить здесь (чтобы вырезать середину)"
-                            android:textSize="12sp" />
+                            android:background="@drawable/bg_tool_circle"
+                            android:contentDescription="Конец здесь"
+                            android:padding="8dp"
+                            android:src="@drawable/ic_trim_end"
+                            app:tint="@color/primary" />
                     </LinearLayout>
 
                     <!-- Panel 2: Rotate & Flip active clip -->
