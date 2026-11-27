@@ -8,52 +8,62 @@ import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.util.AttributeSet;
+import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 
 import androidx.annotation.Nullable;
 import androidx.core.content.ContextCompat;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class VideoFilmstripView extends View {
 
     public interface OnFilmstripListener {
-        void onTrimChanged(long startMs, long endMs, boolean isStartHandle, boolean fromUser);
-        void onScrub(long positionMs, boolean fromUser);
+        void onClipSelected(int clipIndex);
+        void onScrub(int clipIndex, long clipPositionMs, boolean fromUser);
+        void onClipSwipedDelete(int clipIndex);
         void onTouchFinished();
     }
 
-    private static final int MODE_NONE = 0;
-    private static final int MODE_START = 1;
-    private static final int MODE_END = 2;
-    private static final int MODE_PLAYHEAD = 3;
+    private static final int GESTURE_NONE = 0;
+    private static final int GESTURE_SCRUB = 1;
+    private static final int GESTURE_SWIPE_DELETE = 2;
 
-    private long durationMs = 10000L;
-    private long trimStartMs = 0L;
-    private long trimEndMs = 10000L;
-    private long playheadMs = 0L;
+    private final List<AudioUtils.VideoInfo> clips = new ArrayList<>();
+    private final Map<String, List<Bitmap>> frameCache = new HashMap<>();
+    private int activeClipIndex = 0;
+    private long activeClipPlayheadMs = 0L;
 
-    private final List<Bitmap> frames = new ArrayList<>();
     private OnFilmstripListener listener;
 
     private float density;
-    private float handleWidth;
-    private float touchSlopRadius;
-    private int dragMode = MODE_NONE;
+    private float dividerGapPx;
+    private float touchSlop;
+    private float deleteThresholdPx;
+
+    private int gestureMode = GESTURE_NONE;
+    private int touchedClipIndex = -1;
+    private float downX, downY;
+    private float swipeOffsetY = 0f;
 
     private final Paint bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint dimPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint borderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint handlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-    private final Paint gripPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint clipBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint dividerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint activeBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint badgeBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint badgeTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint playheadPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint playheadShadowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint deleteTintPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     private final Rect srcRect = new Rect();
     private final RectF dstRect = new RectF();
-    private final RectF tempRect = new RectF();
+    private final RectF clipRect = new RectF();
 
     public VideoFilmstripView(Context context) {
         super(context);
@@ -72,88 +82,97 @@ public class VideoFilmstripView extends View {
 
     private void init(Context context) {
         density = getResources().getDisplayMetrics().density;
-        handleWidth = 16f * density;
-        touchSlopRadius = 28f * density;
+        dividerGapPx = 6f * density;
+        touchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
+        deleteThresholdPx = 42f * density;
 
-        bgPaint.setColor(Color.parseColor("#0F172A"));
-        dimPaint.setColor(Color.parseColor("#B3050811"));
+        bgPaint.setColor(ContextCompat.getColor(context, R.color.surface_bg));
+        clipBgPaint.setColor(ContextCompat.getColor(context, R.color.pill_bg));
+        dividerPaint.setColor(ContextCompat.getColor(context, R.color.surface_bg));
 
-        borderPaint.setColor(ContextCompat.getColor(context, R.color.primary));
-        borderPaint.setStyle(Paint.Style.STROKE);
-        borderPaint.setStrokeWidth(3f * density);
+        activeBorderPaint.setColor(ContextCompat.getColor(context, R.color.primary));
+        activeBorderPaint.setStyle(Paint.Style.STROKE);
+        activeBorderPaint.setStrokeWidth(3f * density);
 
-        handlePaint.setColor(ContextCompat.getColor(context, R.color.primary));
-
-        gripPaint.setColor(ContextCompat.getColor(context, R.color.on_primary));
-        gripPaint.setStrokeWidth(2f * density);
-        gripPaint.setStrokeCap(Paint.Cap.ROUND);
+        badgeBgPaint.setColor(Color.parseColor("#B8000000"));
+        badgeTextPaint.setColor(Color.WHITE);
+        badgeTextPaint.setTextSize(10f * density);
+        badgeTextPaint.setFakeBoldText(true);
 
         playheadPaint.setColor(Color.WHITE);
         playheadPaint.setStrokeWidth(2.5f * density);
 
-        playheadShadowPaint.setColor(Color.parseColor("#88000000"));
+        playheadShadowPaint.setColor(Color.parseColor("#99000000"));
         playheadShadowPaint.setStrokeWidth(5f * density);
+
+        deleteTintPaint.setColor(Color.parseColor("#88DC2626"));
     }
 
     public void setListener(OnFilmstripListener listener) {
         this.listener = listener;
     }
 
-    public void setClipData(long durationMs, long startMs, long endMs) {
-        this.durationMs = Math.max(500L, durationMs);
-        this.trimStartMs = Math.max(0L, Math.min(startMs, this.durationMs - 300L));
-        this.trimEndMs = Math.max(this.trimStartMs + 300L, Math.min(endMs > 0 ? endMs : this.durationMs, this.durationMs));
-        this.playheadMs = this.trimStartMs;
-        clearFrames();
-        invalidate();
-    }
-
-    public void setFrames(List<Bitmap> newFrames) {
-        clearFrames();
-        if (newFrames != null) {
-            frames.addAll(newFrames);
+    public void setClips(List<AudioUtils.VideoInfo> newClips, int activeIdx, long playheadMs) {
+        this.clips.clear();
+        if (newClips != null) {
+            this.clips.addAll(newClips);
         }
+        this.activeClipIndex = Math.max(0, Math.min(activeIdx, Math.max(0, clips.size() - 1)));
+        this.activeClipPlayheadMs = playheadMs;
+        this.swipeOffsetY = 0f;
+        this.gestureMode = GESTURE_NONE;
+        this.touchedClipIndex = -1;
         invalidate();
     }
 
-    private void clearFrames() {
-        frames.clear();
+    public void putFramesForUri(String uriKey, List<Bitmap> frames) {
+        if (uriKey != null && frames != null && !frames.isEmpty()) {
+            frameCache.put(uriKey, frames);
+            invalidate();
+        }
     }
 
-    public void setTrimRange(long startMs, long endMs) {
-        this.trimStartMs = Math.max(0L, Math.min(startMs, durationMs - 300L));
-        this.trimEndMs = Math.max(this.trimStartMs + 300L, Math.min(endMs, durationMs));
-        invalidate();
+    public boolean hasFramesForUri(String uriKey) {
+        List<Bitmap> list = frameCache.get(uriKey);
+        return list != null && !list.isEmpty();
     }
 
-    public void setPlayheadMs(long ms) {
-        this.playheadMs = Math.max(0L, Math.min(ms, durationMs));
+    public void setActivePlayhead(int clipIndex, long positionMs) {
+        this.activeClipIndex = Math.max(0, Math.min(clipIndex, Math.max(0, clips.size() - 1)));
+        this.activeClipPlayheadMs = positionMs;
         invalidate();
     }
 
     public long getPlayheadMs() {
-        return playheadMs;
+        return activeClipPlayheadMs;
     }
 
-    private float getTrackLeft() {
-        return handleWidth;
+    private long getTotalEffectiveMs() {
+        long sum = 0;
+        for (AudioUtils.VideoInfo c : clips) {
+            sum += Math.max(300L, c.getEffectiveDurationMs());
+        }
+        return Math.max(300L, sum);
     }
 
-    private float getTrackRight() {
-        return Math.max(handleWidth + 10f, getWidth() - handleWidth);
-    }
+    private float[] computeClipBoundsX() {
+        int n = clips.size();
+        float[] bounds = new float[n * 2];
+        if (n == 0) return bounds;
+        float padX = 4f * density;
+        float totalGaps = Math.max(0, n - 1) * dividerGapPx;
+        float availW = Math.max(20f, getWidth() - padX * 2f - totalGaps);
+        long totalMs = getTotalEffectiveMs();
 
-    private float msToX(long ms) {
-        float left = getTrackLeft();
-        float width = getTrackRight() - left;
-        return left + width * ((float) ms / (float) Math.max(1L, durationMs));
-    }
-
-    private long xToMs(float x) {
-        float left = getTrackLeft();
-        float width = Math.max(1f, getTrackRight() - left);
-        float frac = Math.max(0f, Math.min(1f, (x - left) / width));
-        return Math.round(frac * durationMs);
+        float curX = padX;
+        for (int i = 0; i < n; i++) {
+            long dur = Math.max(300L, clips.get(i).getEffectiveDurationMs());
+            float w = availW * ((float) dur / (float) totalMs);
+            bounds[i * 2] = curX;
+            bounds[i * 2 + 1] = curX + w;
+            curX += w + dividerGapPx;
+        }
+        return bounds;
     }
 
     @Override
@@ -161,128 +180,189 @@ public class VideoFilmstripView extends View {
         super.onDraw(canvas);
         int w = getWidth();
         int h = getHeight();
-        if (w <= 0 || h <= 0) return;
+        if (w <= 0 || h <= 0 || clips.isEmpty()) return;
 
-        float top = 6f * density;
-        float bottom = h - 6f * density;
-        float left = getTrackLeft();
-        float right = getTrackRight();
-        float trackW = right - left;
+        float topBase = 6f * density;
+        float bottomBase = h - 6f * density;
+        float[] bounds = computeClipBoundsX();
 
-        // Track background
-        tempRect.set(left, top, right, bottom);
-        canvas.drawRoundRect(tempRect, 6f * density, 6f * density, bgPaint);
+        for (int i = 0; i < clips.size(); i++) {
+            AudioUtils.VideoInfo clip = clips.get(i);
+            float left = bounds[i * 2];
+            float right = bounds[i * 2 + 1];
+            float segW = right - left;
+            if (segW < 2f) continue;
 
-        // Filmstrip frames
-        if (!frames.isEmpty()) {
-            float frameW = trackW / frames.size();
-            for (int i = 0; i < frames.size(); i++) {
-                Bitmap bmp = frames.get(i);
-                if (bmp != null && !bmp.isRecycled()) {
-                    srcRect.set(0, 0, bmp.getWidth(), bmp.getHeight());
-                    dstRect.set(left + i * frameW, top, left + (i + 1) * frameW + 0.5f, bottom);
-                    canvas.drawBitmap(bmp, srcRect, dstRect, null);
+            float dy = (gestureMode == GESTURE_SWIPE_DELETE && i == touchedClipIndex) ? swipeOffsetY : 0f;
+            float top = topBase + dy;
+            float bottom = bottomBase + dy;
+
+            clipRect.set(left, top, right, bottom);
+            canvas.save();
+            canvas.clipRect(clipRect);
+
+            canvas.drawRect(clipRect, clipBgPaint);
+
+            // Draw real frames proportional to this clip's trim range
+            List<Bitmap> allFrames = frameCache.get(clip.uri.toString());
+            if (allFrames != null && !allFrames.isEmpty()) {
+                int totalFrames = allFrames.size();
+                float startFrac = clip.durationMs > 0 ? ((float) clip.trimStartMs / clip.durationMs) : 0f;
+                float endFrac = clip.durationMs > 0 ? ((float) clip.trimEndMs / clip.durationMs) : 1f;
+                int fStart = Math.max(0, Math.min(totalFrames - 1, Math.round(startFrac * (totalFrames - 1))));
+                int fEnd = Math.max(fStart, Math.min(totalFrames - 1, Math.round(endFrac * (totalFrames - 1))));
+
+                int tileCount = Math.max(1, Math.min(12, Math.round(segW / (44f * density))));
+                float tileW = segW / tileCount;
+                for (int t = 0; t < tileCount; t++) {
+                    float fRatio = (tileCount == 1) ? 0.5f : ((float) t / (tileCount - 1));
+                    int frameIdx = Math.round(fStart + fRatio * (fEnd - fStart));
+                    frameIdx = Math.max(0, Math.min(totalFrames - 1, frameIdx));
+                    Bitmap bmp = allFrames.get(frameIdx);
+                    if (bmp != null && !bmp.isRecycled()) {
+                        srcRect.set(0, 0, bmp.getWidth(), bmp.getHeight());
+                        dstRect.set(left + t * tileW, top, left + (t + 1) * tileW + 0.5f, bottom);
+                        canvas.drawBitmap(bmp, srcRect, dstRect, null);
+                    }
                 }
+            }
+
+            // Red tint when swiping to delete past threshold
+            if (gestureMode == GESTURE_SWIPE_DELETE && i == touchedClipIndex && Math.abs(swipeOffsetY) > deleteThresholdPx * 0.5f) {
+                canvas.drawRect(clipRect, deleteTintPaint);
+            }
+
+            // Clip index & duration badge
+            if (segW > 28f * density) {
+                String label = (i + 1) + " • " + AudioUtils.formatTimeMs(clip.getEffectiveDurationMs());
+                float tw = badgeTextPaint.measureText(label);
+                float bx = left + 4f * density;
+                float by = bottom - 4f * density;
+                canvas.drawRect(bx - 2f * density, by - 12f * density, bx + tw + 3f * density, by + 2f * density, badgeBgPaint);
+                canvas.drawText(label, bx, by - 2f * density, badgeTextPaint);
+            }
+
+            canvas.restore();
+
+            // Highlight border for active clip
+            if (i == activeClipIndex) {
+                canvas.drawRect(left + 1.5f * density, top + 1.5f * density, right - 1.5f * density, bottom - 1.5f * density, activeBorderPaint);
             }
         }
 
-        float startX = msToX(trimStartMs);
-        float endX = msToX(trimEndMs);
+        // White vertical playhead on active clip
+        if (activeClipIndex >= 0 && activeClipIndex < clips.size()) {
+            AudioUtils.VideoInfo active = clips.get(activeClipIndex);
+            float left = bounds[activeClipIndex * 2];
+            float right = bounds[activeClipIndex * 2 + 1];
+            long effDur = Math.max(1L, active.getEffectiveDurationMs());
+            float frac = Math.max(0f, Math.min(1f, (float) (activeClipPlayheadMs - active.trimStartMs) / (float) effDur));
+            float playX = left + (right - left) * frac;
 
-        // Dimmed regions outside trim range
-        if (startX > left) {
-            canvas.drawRect(left, top, startX, bottom, dimPaint);
+            canvas.drawLine(playX, 1f * density, playX, h - 1f * density, playheadShadowPaint);
+            canvas.drawLine(playX, 1f * density, playX, h - 1f * density, playheadPaint);
+            canvas.drawCircle(playX, 4f * density, 4f * density, playheadPaint);
         }
-        if (endX < right) {
-            canvas.drawRect(endX, top, right, bottom, dimPaint);
+    }
+
+    private int findClipAtX(float x, float[] bounds) {
+        for (int i = 0; i < clips.size(); i++) {
+            if (x >= bounds[i * 2] - dividerGapPx / 2f && x <= bounds[i * 2 + 1] + dividerGapPx / 2f) {
+                return i;
+            }
         }
-
-        // Orange top & bottom trim border
-        canvas.drawLine(startX, top + 1.5f * density, endX, top + 1.5f * density, borderPaint);
-        canvas.drawLine(startX, bottom - 1.5f * density, endX, bottom - 1.5f * density, borderPaint);
-
-        // Left trim handle
-        tempRect.set(startX - handleWidth, top, startX, bottom);
-        canvas.drawRoundRect(tempRect, 5f * density, 5f * density, handlePaint);
-        float midY = (top + bottom) / 2f;
-        canvas.drawLine(startX - handleWidth / 2f, midY - 8f * density, startX - handleWidth / 2f, midY + 8f * density, gripPaint);
-
-        // Right trim handle
-        tempRect.set(endX, top, endX + handleWidth, bottom);
-        canvas.drawRoundRect(tempRect, 5f * density, 5f * density, handlePaint);
-        canvas.drawLine(endX + handleWidth / 2f, midY - 8f * density, endX + handleWidth / 2f, midY + 8f * density, gripPaint);
-
-        // White vertical playhead
-        float playX = msToX(playheadMs);
-        canvas.drawLine(playX, 2f * density, playX, h - 2f * density, playheadShadowPaint);
-        canvas.drawLine(playX, 2f * density, playX, h - 2f * density, playheadPaint);
-        canvas.drawCircle(playX, 4f * density, 4f * density, playheadPaint);
+        return clips.isEmpty() ? -1 : Math.max(0, Math.min(clips.size() - 1, activeClipIndex));
     }
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        if (clips.isEmpty()) return false;
         if (getParent() != null) {
             getParent().requestDisallowInterceptTouchEvent(true);
         }
+
         float x = event.getX();
+        float y = event.getY();
+        float[] bounds = computeClipBoundsX();
+
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
-                float startCenter = msToX(trimStartMs) - handleWidth / 2f;
-                float endCenter = msToX(trimEndMs) + handleWidth / 2f;
-                float distStart = Math.abs(x - startCenter);
-                float distEnd = Math.abs(x - endCenter);
-
-                if (distStart <= touchSlopRadius && distStart <= distEnd) {
-                    dragMode = MODE_START;
-                } else if (distEnd <= touchSlopRadius) {
-                    dragMode = MODE_END;
-                } else {
-                    dragMode = MODE_PLAYHEAD;
-                    updatePlayheadFromTouch(x);
-                }
+                downX = x;
+                downY = y;
+                swipeOffsetY = 0f;
+                gestureMode = GESTURE_NONE;
+                touchedClipIndex = findClipAtX(x, bounds);
                 return true;
 
             case MotionEvent.ACTION_MOVE:
-                if (dragMode == MODE_START) {
-                    long newStart = xToMs(x + handleWidth / 2f);
-                    newStart = Math.max(0L, Math.min(newStart, trimEndMs - 300L));
-                    if (newStart != trimStartMs) {
-                        trimStartMs = newStart;
-                        playheadMs = newStart;
-                        invalidate();
-                        if (listener != null) listener.onTrimChanged(trimStartMs, trimEndMs, true, true);
+                float dx = x - downX;
+                float dy = y - downY;
+
+                if (gestureMode == GESTURE_NONE) {
+                    if (Math.abs(dy) > touchSlop && Math.abs(dy) > Math.abs(dx) * 1.2f) {
+                        gestureMode = GESTURE_SWIPE_DELETE;
+                    } else if (Math.abs(dx) > touchSlop) {
+                        gestureMode = GESTURE_SCRUB;
                     }
-                } else if (dragMode == MODE_END) {
-                    long newEnd = xToMs(x - handleWidth / 2f);
-                    newEnd = Math.min(durationMs, Math.max(newEnd, trimStartMs + 300L));
-                    if (newEnd != trimEndMs) {
-                        trimEndMs = newEnd;
-                        playheadMs = newEnd;
-                        invalidate();
-                        if (listener != null) listener.onTrimChanged(trimStartMs, trimEndMs, false, true);
-                    }
-                } else if (dragMode == MODE_PLAYHEAD) {
-                    updatePlayheadFromTouch(x);
+                }
+
+                if (gestureMode == GESTURE_SWIPE_DELETE) {
+                    swipeOffsetY = dy;
+                    invalidate();
+                } else if (gestureMode == GESTURE_SCRUB) {
+                    scrubAtX(x, bounds);
                 }
                 return true;
 
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
-                dragMode = MODE_NONE;
+                if (gestureMode == GESTURE_SWIPE_DELETE) {
+                    if (Math.abs(swipeOffsetY) >= deleteThresholdPx && touchedClipIndex >= 0 && touchedClipIndex < clips.size()) {
+                        performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+                        int delIdx = touchedClipIndex;
+                        swipeOffsetY = 0f;
+                        gestureMode = GESTURE_NONE;
+                        if (listener != null) listener.onClipSwipedDelete(delIdx);
+                    } else {
+                        swipeOffsetY = 0f;
+                        gestureMode = GESTURE_NONE;
+                        invalidate();
+                    }
+                } else if (gestureMode == GESTURE_NONE) {
+                    // Single tap -> select clip & seek playhead right there
+                    scrubAtX(x, bounds);
+                    if (listener != null) listener.onTouchFinished();
+                } else {
+                    if (listener != null) listener.onTouchFinished();
+                }
+
+                gestureMode = GESTURE_NONE;
+                touchedClipIndex = -1;
                 if (getParent() != null) {
                     getParent().requestDisallowInterceptTouchEvent(false);
                 }
-                if (listener != null) listener.onTouchFinished();
                 return true;
         }
         return super.onTouchEvent(event);
     }
 
-    private void updatePlayheadFromTouch(float x) {
-        long ms = xToMs(x);
-        ms = Math.max(trimStartMs, Math.min(ms, trimEndMs));
-        playheadMs = ms;
+    private void scrubAtX(float x, float[] bounds) {
+        int idx = findClipAtX(x, bounds);
+        if (idx < 0 || idx >= clips.size()) return;
+        AudioUtils.VideoInfo clip = clips.get(idx);
+        float left = bounds[idx * 2];
+        float right = bounds[idx * 2 + 1];
+        float frac = Math.max(0f, Math.min(1f, (x - left) / Math.max(1f, right - left)));
+        long targetMs = clip.trimStartMs + Math.round(frac * clip.getEffectiveDurationMs());
+
+        boolean clipChanged = (idx != activeClipIndex);
+        activeClipIndex = idx;
+        activeClipPlayheadMs = targetMs;
         invalidate();
-        if (listener != null) listener.onScrub(playheadMs, true);
+
+        if (listener != null) {
+            if (clipChanged) listener.onClipSelected(idx);
+            listener.onScrub(idx, targetMs, true);
+        }
     }
 }

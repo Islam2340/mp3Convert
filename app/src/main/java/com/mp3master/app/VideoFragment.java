@@ -28,9 +28,6 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
-import androidx.recyclerview.widget.LinearLayoutManager;
-import androidx.recyclerview.widget.ItemTouchHelper;
-import androidx.recyclerview.widget.RecyclerView;
 
 import com.arthenica.ffmpegkit.FFmpegKit;
 import com.arthenica.ffmpegkit.ReturnCode;
@@ -96,7 +93,6 @@ public class VideoFragment extends Fragment {
     private static int targetRes = 0; // 0=orig, 1080, 720, 480
     private static String savedOutputName = "";
 
-    private VideoClipAdapter clipAdapter;
 
     // Frame-accurate MediaPlayer + TextureView
     private MediaPlayer mediaPlayer;
@@ -147,7 +143,7 @@ public class VideoFragment extends Fragment {
                         return;
                     }
                     int pos = mediaPlayer.getCurrentPosition();
-                    videoFilmstrip.setPlayheadMs(pos);
+                    videoFilmstrip.setActivePlayhead(activeClipIndex, pos);
                     updateTimeReadout(pos);
                     if (pos >= clip.trimEndMs || !mediaPlayer.isPlaying()) {
                         pauseVideoPreview();
@@ -255,35 +251,7 @@ public class VideoFragment extends Fragment {
         setupTextureView();
         setupFilmstrip();
 
-        // Horizontal timeline RecyclerView
-        RecyclerView rvTimeline = view.findViewById(R.id.rvVideoTimeline);
-        clipAdapter = new VideoClipAdapter(clips, pos -> {
-            pauseVideoPreview();
-            activeClipIndex = pos;
-            bindActiveClip();
-        });
-        rvTimeline.setLayoutManager(new LinearLayoutManager(getContext(), LinearLayoutManager.HORIZONTAL, false));
-        rvTimeline.setAdapter(clipAdapter);
 
-        ItemTouchHelper.SimpleCallback swipeToDeleteCallback = new ItemTouchHelper.SimpleCallback(
-                0, ItemTouchHelper.UP | ItemTouchHelper.DOWN
-        ) {
-            @Override
-            public boolean onMove(@NonNull RecyclerView recyclerView,
-                                  @NonNull RecyclerView.ViewHolder viewHolder,
-                                  @NonNull RecyclerView.ViewHolder target) {
-                return false;
-            }
-
-            @Override
-            public void onSwiped(@NonNull RecyclerView.ViewHolder viewHolder, int direction) {
-                int pos = viewHolder.getBindingAdapterPosition();
-                if (pos >= 0 && pos < clips.size()) {
-                    deleteClipAt(pos);
-                }
-            }
-        };
-        new ItemTouchHelper(swipeToDeleteCallback).attachToRecyclerView(rvTimeline);
 
         // Pickers
         view.findViewById(R.id.btnPickInitialVideos).setOnClickListener(v ->
@@ -298,7 +266,6 @@ public class VideoFragment extends Fragment {
             if (activeClipIndex > 0) {
                 pauseVideoPreview();
                 activeClipIndex--;
-                clipAdapter.setSelectedIndex(activeClipIndex);
                 bindActiveClip();
             }
         });
@@ -306,7 +273,6 @@ public class VideoFragment extends Fragment {
             if (activeClipIndex < clips.size() - 1) {
                 pauseVideoPreview();
                 activeClipIndex++;
-                clipAdapter.setSelectedIndex(activeClipIndex);
                 bindActiveClip();
             }
         });
@@ -323,9 +289,8 @@ public class VideoFragment extends Fragment {
             long pos = videoFilmstrip.getPlayheadMs();
             if (pos < clip.trimEndMs - 300L) {
                 clip.trimStartMs = pos;
-                videoFilmstrip.setTrimRange(clip.trimStartMs, clip.trimEndMs);
+                videoFilmstrip.setClips(clips, activeClipIndex, clip.trimStartMs);
                 updateTrimLabels();
-                clipAdapter.notifyItemChanged(activeClipIndex);
                 updateTotalDurationHeader();
             }
         });
@@ -335,14 +300,12 @@ public class VideoFragment extends Fragment {
             long pos = videoFilmstrip.getPlayheadMs();
             if (pos > clip.trimStartMs + 300L) {
                 clip.trimEndMs = pos;
-                videoFilmstrip.setTrimRange(clip.trimStartMs, clip.trimEndMs);
+                videoFilmstrip.setClips(clips, activeClipIndex, clip.trimStartMs);
                 updateTrimLabels();
-                clipAdapter.notifyItemChanged(activeClipIndex);
                 updateTotalDurationHeader();
             }
         });
 
-        view.findViewById(R.id.btnSplitClipHere).setOnClickListener(v -> splitActiveClipAtPlayhead());
 
         // Clip order / delete
         view.findViewById(R.id.btnClipMoveLeft).setOnClickListener(v -> {
@@ -620,25 +583,24 @@ public class VideoFragment extends Fragment {
     private void setupFilmstrip() {
         videoFilmstrip.setListener(new VideoFilmstripView.OnFilmstripListener() {
             @Override
-            public void onTrimChanged(long startMs, long endMs, boolean isStartHandle, boolean fromUser) {
-                AudioUtils.VideoInfo clip = getActiveClip();
-                if (clip == null) return;
-                if (isPlayingPreview) pauseVideoPreview();
-                clip.trimStartMs = startMs;
-                clip.trimEndMs = endMs;
-                updateTrimLabels();
-                clipAdapter.notifyItemChanged(activeClipIndex);
-                updateTotalDurationHeader();
-                long target = isStartHandle ? startMs : endMs;
-                updateTimeReadout(target);
-                seekPlayerThrottled(target);
+            public void onClipSelected(int clipIndex) {
+                if (clipIndex >= 0 && clipIndex < clips.size()) {
+                    pauseVideoPreview();
+                    activeClipIndex = clipIndex;
+                    bindActiveClip();
+                }
             }
 
             @Override
-            public void onScrub(long positionMs, boolean fromUser) {
+            public void onScrub(int clipIndex, long clipPositionMs, boolean fromUser) {
                 if (isPlayingPreview) pauseVideoPreview();
-                updateTimeReadout(positionMs);
-                seekPlayerThrottled(positionMs);
+                updateTimeReadout(clipPositionMs);
+                seekPlayerThrottled(clipPositionMs);
+            }
+
+            @Override
+            public void onClipSwipedDelete(int clipIndex) {
+                deleteClipAt(clipIndex);
             }
 
             @Override
@@ -743,8 +705,10 @@ public class VideoFragment extends Fragment {
     }
 
     private void loadFilmstripFrames(AudioUtils.VideoInfo clip) {
-        final int token = ++filmstripGenToken;
         if (clip == null || getContext() == null) return;
+        final String uriKey = clip.uri.toString();
+        if (videoFilmstrip.hasFramesForUri(uriKey)) return;
+
         final Context appCtx = requireContext().getApplicationContext();
         final Uri uri = clip.uri;
         final long durMs = Math.max(500L, clip.durationMs);
@@ -756,7 +720,6 @@ public class VideoFragment extends Fragment {
                 mmr.setDataSource(appCtx, uri);
                 int count = 12;
                 for (int i = 0; i < count; i++) {
-                    if (token != filmstripGenToken) break;
                     long timeUs = (durMs * 1000L * i) / count;
                     Bitmap raw = mmr.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
                     if (raw != null) {
@@ -772,12 +735,8 @@ public class VideoFragment extends Fragment {
                 } catch (Exception ignored) {
                 }
             }
-            if (token == filmstripGenToken && !result.isEmpty()) {
-                runUi(() -> {
-                    if (token == filmstripGenToken) {
-                        videoFilmstrip.setFrames(result);
-                    }
-                });
+            if (!result.isEmpty()) {
+                runUi(() -> videoFilmstrip.putFramesForUri(uriKey, result));
             }
         });
     }
@@ -815,7 +774,6 @@ public class VideoFragment extends Fragment {
             return;
         }
 
-        clipAdapter.setSelectedIndex(activeClipIndex);
         btnStartExport.setText(clips.size() > 1
                 ? ("Сохранить видео (" + clips.size() + " клипов)")
                 : "Сохранить видео MP4");
@@ -836,7 +794,7 @@ public class VideoFragment extends Fragment {
 
         isUpdatingUi = true;
         tvActiveClipName.setText((activeClipIndex + 1) + ". " + clip.displayName);
-        videoFilmstrip.setClipData(clip.durationMs, clip.trimStartMs, clip.trimEndMs);
+        videoFilmstrip.setClips(clips, activeClipIndex, clip.trimStartMs);
 
         if (clip.extraRotateDeg == 90) chipGroupRotate.check(R.id.chipRot90);
         else if (clip.extraRotateDeg == 180) chipGroupRotate.check(R.id.chipRot180);
@@ -879,7 +837,7 @@ public class VideoFragment extends Fragment {
         pauseVideoPreview();
         long cur = videoFilmstrip.getPlayheadMs();
         long next = Math.max(clip.trimStartMs, Math.min(clip.trimEndMs, cur + deltaMs));
-        videoFilmstrip.setPlayheadMs(next);
+        videoFilmstrip.setActivePlayhead(activeClipIndex, next);
         updateTimeReadout(next);
         seekPlayerExact(next);
     }
@@ -888,7 +846,7 @@ public class VideoFragment extends Fragment {
         AudioUtils.VideoInfo clip = getActiveClip();
         if (clip == null || mediaPlayer == null || !isPlayerPrepared) return;
         long jump = Math.max(clip.trimStartMs, clip.trimEndMs - 5000L);
-        videoFilmstrip.setPlayheadMs(jump);
+        videoFilmstrip.setActivePlayhead(activeClipIndex, jump);
         updateTimeReadout(jump);
         seekPlayerExact(jump);
         startVideoPlayback();
@@ -904,7 +862,7 @@ public class VideoFragment extends Fragment {
         long cur = videoFilmstrip.getPlayheadMs();
         if (cur < clip.trimStartMs || cur >= clip.trimEndMs - 150L) {
             cur = clip.trimStartMs;
-            videoFilmstrip.setPlayheadMs(cur);
+            videoFilmstrip.setActivePlayhead(activeClipIndex, cur);
             seekPlayerExact(cur);
         }
         startVideoPlayback();
