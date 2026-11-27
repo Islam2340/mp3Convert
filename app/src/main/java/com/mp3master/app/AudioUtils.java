@@ -407,6 +407,21 @@ public class AudioUtils {
         public int height;
         public int rotation;
         public boolean hasAudio;
+        public long trimStartMs;
+        public long trimEndMs;
+        public int extraRotateDeg;
+        public boolean flipH;
+        public boolean flipV;
+
+        public long getEffectiveDurationMs() {
+            long end = (trimEndMs > 0 && trimEndMs <= durationMs) ? trimEndMs : durationMs;
+            long start = Math.max(0, Math.min(trimStartMs, end));
+            return Math.max(0, end - start);
+        }
+
+        public boolean isTrimmed() {
+            return durationMs > 0 && (trimStartMs > 100 || (trimEndMs > 0 && trimEndMs < durationMs - 100));
+        }
 
         public int getDisplayWidth() {
             return (rotation == 90 || rotation == 270) ? height : width;
@@ -445,6 +460,8 @@ public class AudioUtils {
             } catch (Exception ignored) {
             }
         }
+        info.trimStartMs = 0;
+        info.trimEndMs = info.durationMs;
         return info;
     }
 

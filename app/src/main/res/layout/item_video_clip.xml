@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/clipCardRoot"
+    android:layout_width="112dp"
+    android:layout_height="68dp"
+    android:layout_marginEnd="6dp"
+    android:background="@drawable/bg_clip_normal"
+    android:padding="2dp">
+
+    <ImageView
+        android:id="@+id/ivClipThumb"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="Кадр"
+        android:scaleType="centerCrop" />
+
+    <TextView
+        android:id="@+id/tvClipIndex"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_margin="4dp"
+        android:background="#B3000000"
+        android:paddingHorizontal="5dp"
+        android:paddingVertical="1dp"
+        android:text="1"
+        android:textColor="#FFFFFF"
+        android:textSize="10sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/tvClipDur"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|end"
+        android:layout_margin="4dp"
+        android:background="#B3000000"
+        android:paddingHorizontal="5dp"
+        android:paddingVertical="1dp"
+        android:text="00:15"
+        android:textColor="#FFFFFF"
+        android:textSize="10sp" />
+
+</FrameLayout>

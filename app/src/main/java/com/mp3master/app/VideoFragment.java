@@ -8,6 +8,8 @@ import android.os.Looper;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageButton;
+import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.widget.VideoView;
@@ -55,27 +57,19 @@ public class VideoFragment extends Fragment {
     private static final int AUDIO_MUTE = 1;
     private static final int AUDIO_CUSTOM = 2;
 
-    private AudioUtils.VideoInfo selectedVideo;
-    private Uri customAudioUri;
-    private String customAudioName;
+    private final List<AudioUtils.VideoInfo> clips = new ArrayList<>();
+    private VideoClipAdapter clipAdapter;
+    private int activeClipIndex = 0;
 
-    private int rotateDeg = 0;
-    private boolean flipH = false;
-    private boolean flipV = false;
+    private Uri customAudioUri;
     private int aspectMode = ASPECT_ORIG;
     private int fillMode = FILL_BLUR;
     private int audioMode = AUDIO_ORIG;
     private double speedFactor = 1.0;
     private int targetRes = 0; // 0=orig, 1080, 720, 480
 
-    // Merge mode state
-    private final List<AudioUtils.VideoInfo> mergeVideos = new ArrayList<>();
-    private VideoMergeAdapter mergeAdapter;
-    private int mergeAspect = ASPECT_16_9;
-    private int mergeRes = 720;
-
-    // Playback & execution state
     private boolean isPlayingPreview = false;
+    private boolean isUpdatingUi = false;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean isCancelled = new AtomicBoolean(false);
@@ -85,15 +79,19 @@ public class VideoFragment extends Fragment {
     private boolean lastResultIsVideo = true;
 
     // Views
-    private View layoutEditorMode, layoutMergeMode, layoutPreviewBox, layoutFillMode, layoutCustomMp3Box, layoutProgress;
-    private MaterialCardView cardTransform, cardAudioSpeed, cardResult;
+    private MaterialCardView cardEmpty, cardResult;
+    private View layoutWorkspace, layoutFillMode, layoutCustomMp3Box, layoutProgress;
+    private View panelTrim, panelRotate, panelFormat, panelAudio, panelSpeed, panelQuality;
+    private ImageView iconToolTrim, iconToolRotate, iconToolFormat, iconToolAudio, iconToolSpeed, iconToolQuality;
     private VideoView videoView;
-    private TextView tvVideoInfo, tvPreviewBadge, tvCurrentPos, tvStart, tvDuration, tvEnd;
-    private TextView tvCustomAudioName, tvStatus, tvResultInfo, tvMergeEmpty;
-    private MaterialButton btnPlayPause, btnStartExport, btnExtractMp3, btnClearMerge, btnStartMerge, btnCancel;
+    private ImageButton btnCenterPlayPause;
+    private TextView tvActiveClipName, tvTotalTimelineDur, tvVideoPreviewBadge, tvActiveTrimRange;
+    private TextView tvVideoStart, tvVideoDuration, tvVideoEnd, tvCustomAudioName, tvStatus, tvResultInfo;
     private RangeSlider rangeSlider;
+    private ChipGroup chipGroupRotate;
     private MaterialSwitch switchFlipH, switchFlipV;
-    private TextInputEditText etOutputName, etMergeOutputName;
+    private TextInputEditText etOutputName;
+    private MaterialButton btnQuickPlay, btnStartExport, btnExtractMp3, btnCancel;
     private LinearProgressIndicator progressBar;
 
     private final Runnable previewUpdater = new Runnable() {
@@ -101,11 +99,13 @@ public class VideoFragment extends Fragment {
         public void run() {
             if (videoView != null && isPlayingPreview) {
                 try {
+                    AudioUtils.VideoInfo clip = getActiveClip();
+                    if (clip == null) {
+                        pauseVideoPreview();
+                        return;
+                    }
                     int pos = videoView.getCurrentPosition();
-                    tvCurrentPos.setText(AudioUtils.formatTimeMs(pos));
-                    List<Float> vals = rangeSlider.getValues();
-                    long endMs = Math.round(vals.get(1) * 1000f);
-                    if (pos >= endMs || !videoView.isPlaying()) {
+                    if (pos >= clip.trimEndMs || !videoView.isPlaying()) {
                         pauseVideoPreview();
                     } else {
                         handler.postDelayed(this, 150);
@@ -116,12 +116,26 @@ public class VideoFragment extends Fragment {
         }
     };
 
-    private final ActivityResultLauncher<String[]> pickVideoLauncher =
-            registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
-                if (uri != null && getContext() != null) {
+    private final ActivityResultLauncher<String[]> pickVideosLauncher =
+            registerForActivityResult(new ActivityResultContracts.OpenMultipleDocuments(), uris -> {
+                if (uris != null && !uris.isEmpty() && getContext() != null) {
                     pauseVideoPreview();
-                    selectedVideo = AudioUtils.getVideoInfo(getContext(), uri);
-                    setupEditorVideoUi();
+                    boolean wasEmpty = clips.isEmpty();
+                    for (Uri uri : uris) {
+                        AudioUtils.VideoInfo vi = AudioUtils.getVideoInfo(getContext(), uri);
+                        if (vi.durationMs >= 300) {
+                            clips.add(vi);
+                        }
+                    }
+                    if (!clips.isEmpty()) {
+                        if (wasEmpty) {
+                            activeClipIndex = 0;
+                            etOutputName.setText(AudioUtils.stripExtension(clips.get(0).displayName) + "_edit");
+                        } else {
+                            activeClipIndex = clips.size() - 1;
+                        }
+                        refreshWorkspace();
+                    }
                 }
             });
 
@@ -129,18 +143,7 @@ public class VideoFragment extends Fragment {
             registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
                 if (uri != null && getContext() != null) {
                     customAudioUri = uri;
-                    customAudioName = AudioUtils.getFileName(getContext(), uri);
-                    tvCustomAudioName.setText("Выбран: " + customAudioName);
-                }
-            });
-
-    private final ActivityResultLauncher<String[]> pickMergeVideosLauncher =
-            registerForActivityResult(new ActivityResultContracts.OpenMultipleDocuments(), uris -> {
-                if (uris != null && !uris.isEmpty() && getContext() != null) {
-                    for (Uri uri : uris) {
-                        mergeVideos.add(AudioUtils.getVideoInfo(getContext(), uri));
-                    }
-                    refreshMergeUi();
+                    tvCustomAudioName.setText("Выбран: " + AudioUtils.getFileName(getContext(), uri));
                 }
             });
 
@@ -149,108 +152,175 @@ public class VideoFragment extends Fragment {
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
         View view = inflater.inflate(R.layout.fragment_video, container, false);
 
-        layoutEditorMode = view.findViewById(R.id.layoutVideoEditorMode);
-        layoutMergeMode = view.findViewById(R.id.layoutVideoMergeMode);
-        layoutPreviewBox = view.findViewById(R.id.layoutVideoPreviewBox);
-        layoutFillMode = view.findViewById(R.id.layoutVideoFillMode);
-        layoutCustomMp3Box = view.findViewById(R.id.layoutCustomMp3Box);
-        layoutProgress = view.findViewById(R.id.layoutVideoProgress);
-
-        cardTransform = view.findViewById(R.id.cardVideoTransform);
-        cardAudioSpeed = view.findViewById(R.id.cardVideoAudioSpeed);
-        cardResult = view.findViewById(R.id.cardVideoResult);
-
+        cardEmpty = view.findViewById(R.id.cardVideoEmpty);
+        layoutWorkspace = view.findViewById(R.id.layoutVideoWorkspace);
         videoView = view.findViewById(R.id.videoViewPreview);
-        tvVideoInfo = view.findViewById(R.id.tvVideoInfo);
-        tvPreviewBadge = view.findViewById(R.id.tvVideoPreviewBadge);
-        tvCurrentPos = view.findViewById(R.id.tvVideoCurrentPos);
-        tvStart = view.findViewById(R.id.tvVideoStart);
-        tvDuration = view.findViewById(R.id.tvVideoDuration);
-        tvEnd = view.findViewById(R.id.tvVideoEnd);
-        tvCustomAudioName = view.findViewById(R.id.tvVideoCustomAudioName);
-        tvStatus = view.findViewById(R.id.tvVideoStatus);
-        tvResultInfo = view.findViewById(R.id.tvVideoResultInfo);
-        tvMergeEmpty = view.findViewById(R.id.tvVideoMergeEmpty);
+        btnCenterPlayPause = view.findViewById(R.id.btnCenterPlayPause);
+        tvActiveClipName = view.findViewById(R.id.tvActiveClipName);
+        tvTotalTimelineDur = view.findViewById(R.id.tvTotalTimelineDur);
+        tvVideoPreviewBadge = view.findViewById(R.id.tvVideoPreviewBadge);
+        tvActiveTrimRange = view.findViewById(R.id.tvActiveTrimRange);
 
-        btnPlayPause = view.findViewById(R.id.btnVideoPlayPause);
-        btnStartExport = view.findViewById(R.id.btnStartVideoExport);
-        btnExtractMp3 = view.findViewById(R.id.btnExtractMp3FromVideo);
-        btnClearMerge = view.findViewById(R.id.btnClearVideoMerge);
-        btnStartMerge = view.findViewById(R.id.btnStartVideoMerge);
-        btnCancel = view.findViewById(R.id.btnCancelVideo);
+        panelTrim = view.findViewById(R.id.panelTrim);
+        panelRotate = view.findViewById(R.id.panelRotate);
+        panelFormat = view.findViewById(R.id.panelFormat);
+        panelAudio = view.findViewById(R.id.panelAudio);
+        panelSpeed = view.findViewById(R.id.panelSpeed);
+        panelQuality = view.findViewById(R.id.panelQuality);
+
+        iconToolTrim = view.findViewById(R.id.iconToolTrim);
+        iconToolRotate = view.findViewById(R.id.iconToolRotate);
+        iconToolFormat = view.findViewById(R.id.iconToolFormat);
+        iconToolAudio = view.findViewById(R.id.iconToolAudio);
+        iconToolSpeed = view.findViewById(R.id.iconToolSpeed);
+        iconToolQuality = view.findViewById(R.id.iconToolQuality);
 
         rangeSlider = view.findViewById(R.id.rangeSliderVideo);
+        tvVideoStart = view.findViewById(R.id.tvVideoStart);
+        tvVideoDuration = view.findViewById(R.id.tvVideoDuration);
+        tvVideoEnd = view.findViewById(R.id.tvVideoEnd);
+        chipGroupRotate = view.findViewById(R.id.chipGroupVideoRotate);
         switchFlipH = view.findViewById(R.id.switchFlipH);
         switchFlipV = view.findViewById(R.id.switchFlipV);
+        layoutFillMode = view.findViewById(R.id.layoutVideoFillMode);
+        layoutCustomMp3Box = view.findViewById(R.id.layoutCustomMp3Box);
+        tvCustomAudioName = view.findViewById(R.id.tvVideoCustomAudioName);
         etOutputName = view.findViewById(R.id.etVideoOutputName);
-        etMergeOutputName = view.findViewById(R.id.etVideoMergeOutputName);
+
+        btnQuickPlay = view.findViewById(R.id.btnQuickPlay);
+        btnStartExport = view.findViewById(R.id.btnStartVideoExport);
+        btnExtractMp3 = view.findViewById(R.id.btnExtractMp3FromVideo);
+        layoutProgress = view.findViewById(R.id.layoutVideoProgress);
         progressBar = view.findViewById(R.id.progressVideo);
+        tvStatus = view.findViewById(R.id.tvVideoStatus);
+        btnCancel = view.findViewById(R.id.btnCancelVideo);
+        cardResult = view.findViewById(R.id.cardVideoResult);
+        tvResultInfo = view.findViewById(R.id.tvVideoResultInfo);
 
-        setupModeSwitch(view);
-        setupEditorControls(view);
-        setupMergeControls(view);
-        setupSharedControls(view);
-
-        return view;
-    }
-
-    private void setupModeSwitch(View view) {
-        ChipGroup modeGroup = view.findViewById(R.id.chipGroupVideoMode);
-        modeGroup.setOnCheckedStateChangeListener((group, checkedIds) -> {
-            if (checkedIds.isEmpty()) return;
+        // Horizontal timeline RecyclerView
+        RecyclerView rvTimeline = view.findViewById(R.id.rvVideoTimeline);
+        clipAdapter = new VideoClipAdapter(clips, pos -> {
             pauseVideoPreview();
-            int id = checkedIds.get(0);
-            boolean isEdit = (id == R.id.chipVideoModeEdit);
-            layoutEditorMode.setVisibility(isEdit ? View.VISIBLE : View.GONE);
-            layoutMergeMode.setVisibility(isEdit ? View.GONE : View.VISIBLE);
-            cardResult.setVisibility(View.GONE);
+            activeClipIndex = pos;
+            bindActiveClip();
         });
-    }
+        rvTimeline.setLayoutManager(new LinearLayoutManager(getContext(), LinearLayoutManager.HORIZONTAL, false));
+        rvTimeline.setAdapter(clipAdapter);
 
-    private void setupEditorControls(View view) {
-        view.findViewById(R.id.btnPickVideo).setOnClickListener(v ->
-                pickVideoLauncher.launch(new String[]{"video/*"}));
+        // Pickers
+        view.findViewById(R.id.btnPickInitialVideos).setOnClickListener(v ->
+                pickVideosLauncher.launch(new String[]{"video/*"}));
+        view.findViewById(R.id.btnAddMoreVideos).setOnClickListener(v ->
+                pickVideosLauncher.launch(new String[]{"video/*"}));
 
-        btnPlayPause.setOnClickListener(v -> toggleVideoPreview());
-        view.findViewById(R.id.btnVideoPlayEnd).setOnClickListener(v -> playVideoEnding());
+        // Transport
+        btnCenterPlayPause.setOnClickListener(v -> toggleVideoPreview());
+        btnQuickPlay.setOnClickListener(v -> toggleVideoPreview());
+        view.findViewById(R.id.btnPrevClip).setOnClickListener(v -> {
+            if (activeClipIndex > 0) {
+                pauseVideoPreview();
+                activeClipIndex--;
+                clipAdapter.setSelectedIndex(activeClipIndex);
+                bindActiveClip();
+            }
+        });
+        view.findViewById(R.id.btnNextClip).setOnClickListener(v -> {
+            if (activeClipIndex < clips.size() - 1) {
+                pauseVideoPreview();
+                activeClipIndex++;
+                clipAdapter.setSelectedIndex(activeClipIndex);
+                bindActiveClip();
+            }
+        });
 
+        // Quick pills
+        view.findViewById(R.id.btnQuickMinus1).setOnClickListener(v -> nudgePlayhead(-1000));
+        view.findViewById(R.id.btnQuickPlus1).setOnClickListener(v -> nudgePlayhead(1000));
+        view.findViewById(R.id.btnQuickEnding).setOnClickListener(v -> playClipEnding());
+
+        // Clip order / delete
+        view.findViewById(R.id.btnClipMoveLeft).setOnClickListener(v -> {
+            if (activeClipIndex > 0) {
+                pauseVideoPreview();
+                Collections.swap(clips, activeClipIndex, activeClipIndex - 1);
+                activeClipIndex--;
+                refreshWorkspace();
+            }
+        });
+        view.findViewById(R.id.btnClipMoveRight).setOnClickListener(v -> {
+            if (activeClipIndex < clips.size() - 1) {
+                pauseVideoPreview();
+                Collections.swap(clips, activeClipIndex, activeClipIndex + 1);
+                activeClipIndex++;
+                refreshWorkspace();
+            }
+        });
+        view.findViewById(R.id.btnClipRemove).setOnClickListener(v -> {
+            if (!clips.isEmpty() && activeClipIndex >= 0 && activeClipIndex < clips.size()) {
+                pauseVideoPreview();
+                clips.remove(activeClipIndex);
+                if (activeClipIndex >= clips.size()) activeClipIndex = Math.max(0, clips.size() - 1);
+                refreshWorkspace();
+            }
+        });
+
+        // Circular tool buttons
+        view.findViewById(R.id.toolTrim).setOnClickListener(v -> selectTool(0));
+        view.findViewById(R.id.toolRotate).setOnClickListener(v -> selectTool(1));
+        view.findViewById(R.id.toolFormat).setOnClickListener(v -> selectTool(2));
+        view.findViewById(R.id.toolAudio).setOnClickListener(v -> selectTool(3));
+        view.findViewById(R.id.toolSpeed).setOnClickListener(v -> selectTool(4));
+        view.findViewById(R.id.toolQuality).setOnClickListener(v -> selectTool(5));
+
+        // Trim slider
         rangeSlider.addOnChangeListener((slider, value, fromUser) -> {
+            if (isUpdatingUi) return;
+            AudioUtils.VideoInfo clip = getActiveClip();
+            if (clip == null) return;
+            List<Float> vals = slider.getValues();
+            clip.trimStartMs = Math.round(vals.get(0) * 1000f);
+            clip.trimEndMs = Math.round(vals.get(1) * 1000f);
             updateTrimLabels();
-            if (fromUser && selectedVideo != null) {
-                int seekMs = Math.round(value * 1000f);
+            clipAdapter.notifyItemChanged(activeClipIndex);
+            updateTotalDurationHeader();
+            if (fromUser) {
                 try {
-                    videoView.seekTo(seekMs);
-                    tvCurrentPos.setText(AudioUtils.formatTimeMs(seekMs));
+                    videoView.seekTo(Math.round(value * 1000f));
                 } catch (Exception ignored) {
                 }
             }
         });
 
-        view.findViewById(R.id.btnVidStartMinus).setOnClickListener(v -> adjustTrim(-1f, 0f));
-        view.findViewById(R.id.btnVidStartPlus).setOnClickListener(v -> adjustTrim(1f, 0f));
-        view.findViewById(R.id.btnVidEndMinus).setOnClickListener(v -> adjustTrim(0f, -1f));
-        view.findViewById(R.id.btnVidEndPlus).setOnClickListener(v -> adjustTrim(0f, 1f));
-
-        ChipGroup rotGroup = view.findViewById(R.id.chipGroupVideoRotate);
-        rotGroup.setOnCheckedStateChangeListener((g, ids) -> {
-            if (ids.isEmpty()) return;
+        // Rotate / Flip
+        chipGroupRotate.setOnCheckedStateChangeListener((g, ids) -> {
+            if (isUpdatingUi || ids.isEmpty()) return;
+            AudioUtils.VideoInfo clip = getActiveClip();
+            if (clip == null) return;
             int id = ids.get(0);
-            if (id == R.id.chipRot0) rotateDeg = 0;
-            else if (id == R.id.chipRot90) rotateDeg = 90;
-            else if (id == R.id.chipRot180) rotateDeg = 180;
-            else if (id == R.id.chipRot270) rotateDeg = 270;
+            if (id == R.id.chipRot0) clip.extraRotateDeg = 0;
+            else if (id == R.id.chipRot90) clip.extraRotateDeg = 90;
+            else if (id == R.id.chipRot180) clip.extraRotateDeg = 180;
+            else if (id == R.id.chipRot270) clip.extraRotateDeg = 270;
             applyVisualPreviewTransform();
         });
-
         switchFlipH.setOnCheckedChangeListener((b, checked) -> {
-            flipH = checked;
-            applyVisualPreviewTransform();
+            if (isUpdatingUi) return;
+            AudioUtils.VideoInfo clip = getActiveClip();
+            if (clip != null) {
+                clip.flipH = checked;
+                applyVisualPreviewTransform();
+            }
         });
         switchFlipV.setOnCheckedChangeListener((b, checked) -> {
-            flipV = checked;
-            applyVisualPreviewTransform();
+            if (isUpdatingUi) return;
+            AudioUtils.VideoInfo clip = getActiveClip();
+            if (clip != null) {
+                clip.flipV = checked;
+                applyVisualPreviewTransform();
+            }
         });
 
+        // Format & Fill
         ChipGroup aspectGroup = view.findViewById(R.id.chipGroupVideoAspect);
         aspectGroup.setOnCheckedStateChangeListener((g, ids) -> {
             if (ids.isEmpty()) return;
@@ -272,6 +342,7 @@ public class VideoFragment extends Fragment {
             else if (id == R.id.chipFillPad) fillMode = FILL_PAD;
         });
 
+        // Audio
         ChipGroup audioGroup = view.findViewById(R.id.chipGroupVideoAudio);
         audioGroup.setOnCheckedStateChangeListener((g, ids) -> {
             if (ids.isEmpty()) return;
@@ -281,12 +352,11 @@ public class VideoFragment extends Fragment {
             else if (id == R.id.chipVidAudioCustom) audioMode = AUDIO_CUSTOM;
             layoutCustomMp3Box.setVisibility(audioMode == AUDIO_CUSTOM ? View.VISIBLE : View.GONE);
         });
-
         view.findViewById(R.id.btnPickVideoCustomAudio).setOnClickListener(v ->
                 pickCustomAudioLauncher.launch(new String[]{"audio/mpeg", "audio/*"}));
+        btnExtractMp3.setOnClickListener(v -> extractMp3FromActiveClip());
 
-        btnExtractMp3.setOnClickListener(v -> extractMp3FromSelectedVideo());
-
+        // Speed
         ChipGroup speedGroup = view.findViewById(R.id.chipGroupVideoSpeed);
         speedGroup.setOnCheckedStateChangeListener((g, ids) -> {
             if (ids.isEmpty()) return;
@@ -299,6 +369,7 @@ public class VideoFragment extends Fragment {
             else if (id == R.id.chipSpeed20) speedFactor = 2.0;
         });
 
+        // Quality
         ChipGroup resGroup = view.findViewById(R.id.chipGroupVideoRes);
         resGroup.setOnCheckedStateChangeListener((g, ids) -> {
             if (ids.isEmpty()) return;
@@ -309,132 +380,103 @@ public class VideoFragment extends Fragment {
             else if (id == R.id.chipRes480) targetRes = 480;
         });
 
-        btnStartExport.setOnClickListener(v -> startVideoExport());
-    }
-
-    private void setupMergeControls(View view) {
-        RecyclerView rv = view.findViewById(R.id.rvVideoMerge);
-        mergeAdapter = new VideoMergeAdapter(mergeVideos, new VideoMergeAdapter.OnVideoActionListener() {
-            @Override
-            public void onMoveUp(int position) {
-                if (position > 0) {
-                    Collections.swap(mergeVideos, position, position - 1);
-                    mergeAdapter.notifyDataSetChanged();
-                }
-            }
-
-            @Override
-            public void onMoveDown(int position) {
-                if (position >= 0 && position < mergeVideos.size() - 1) {
-                    Collections.swap(mergeVideos, position, position + 1);
-                    mergeAdapter.notifyDataSetChanged();
-                }
-            }
-
-            @Override
-            public void onRemove(int position) {
-                if (position >= 0 && position < mergeVideos.size()) {
-                    mergeVideos.remove(position);
-                    refreshMergeUi();
-                }
-            }
-        });
-        rv.setLayoutManager(new LinearLayoutManager(getContext()));
-        rv.setAdapter(mergeAdapter);
-
-        view.findViewById(R.id.btnAddVideosMerge).setOnClickListener(v ->
-                pickMergeVideosLauncher.launch(new String[]{"video/*"}));
-
-        btnClearMerge.setOnClickListener(v -> {
-            mergeVideos.clear();
-            refreshMergeUi();
-        });
-
-        ChipGroup mergeAspectGroup = view.findViewById(R.id.chipGroupVidMergeAspect);
-        mergeAspectGroup.setOnCheckedStateChangeListener((g, ids) -> {
-            if (ids.isEmpty()) return;
-            int id = ids.get(0);
-            if (id == R.id.chipMergeVid169) mergeAspect = ASPECT_16_9;
-            else if (id == R.id.chipMergeVid916) mergeAspect = ASPECT_9_16;
-            else if (id == R.id.chipMergeVid11) mergeAspect = ASPECT_1_1;
-        });
-
-        ChipGroup mergeResGroup = view.findViewById(R.id.chipGroupVidMergeRes);
-        mergeResGroup.setOnCheckedStateChangeListener((g, ids) -> {
-            if (ids.isEmpty()) return;
-            int id = ids.get(0);
-            if (id == R.id.chipMergeVid1080) mergeRes = 1080;
-            else if (id == R.id.chipMergeVid720) mergeRes = 720;
-            else if (id == R.id.chipMergeVid480) mergeRes = 480;
-        });
-
-        btnStartMerge.setOnClickListener(v -> startVideoMerge());
-    }
-
-    private void setupSharedControls(View view) {
+        // Export & Cancel & Result
+        btnStartExport.setOnClickListener(v -> startUnifiedExport());
         btnCancel.setOnClickListener(v -> {
             isCancelled.set(true);
             btnCancel.setEnabled(false);
             tvStatus.setText("Отмена...");
-            if (activeSessionId > 0) {
-                FFmpegKit.cancel(activeSessionId);
-            } else {
-                FFmpegKit.cancel();
-            }
+            if (activeSessionId > 0) FFmpegKit.cancel(activeSessionId);
+            else FFmpegKit.cancel();
         });
-
         view.findViewById(R.id.btnVideoOpenResult).setOnClickListener(v -> {
             if (lastResultUri != null && getContext() != null) {
-                if (lastResultIsVideo) {
-                    AudioUtils.openVideo(getContext(), lastResultUri);
-                } else {
-                    AudioUtils.openAudio(getContext(), lastResultUri);
-                }
+                if (lastResultIsVideo) AudioUtils.openVideo(getContext(), lastResultUri);
+                else AudioUtils.openAudio(getContext(), lastResultUri);
             }
         });
-
         view.findViewById(R.id.btnVideoShareResult).setOnClickListener(v -> {
             if (lastResultUri != null && getContext() != null) {
-                if (lastResultIsVideo) {
-                    AudioUtils.shareVideo(getContext(), lastResultUri);
-                } else {
-                    AudioUtils.shareAudio(getContext(), lastResultUri);
-                }
+                if (lastResultIsVideo) AudioUtils.shareVideo(getContext(), lastResultUri);
+                else AudioUtils.shareAudio(getContext(), lastResultUri);
             }
         });
+
+        return view;
     }
 
-    private void setupEditorVideoUi() {
-        if (selectedVideo == null || selectedVideo.durationMs < 500) {
-            Toast.makeText(getContext(), "Видео слишком короткое или не поддерживается", Toast.LENGTH_SHORT).show();
-            return;
-        }
-        String resStr = (selectedVideo.getDisplayWidth() > 0 && selectedVideo.getDisplayHeight() > 0)
-                ? (selectedVideo.getDisplayWidth() + "×" + selectedVideo.getDisplayHeight() + "  •  ") : "";
-        tvVideoInfo.setText(
-                selectedVideo.displayName + "\n" +
-                resStr + AudioUtils.formatTimeMs(selectedVideo.durationMs) +
-                "  •  " + AudioUtils.formatSize(selectedVideo.sizeBytes)
-        );
+    private void selectTool(int idx) {
+        panelTrim.setVisibility(idx == 0 ? View.VISIBLE : View.GONE);
+        panelRotate.setVisibility(idx == 1 ? View.VISIBLE : View.GONE);
+        panelFormat.setVisibility(idx == 2 ? View.VISIBLE : View.GONE);
+        panelAudio.setVisibility(idx == 3 ? View.VISIBLE : View.GONE);
+        panelSpeed.setVisibility(idx == 4 ? View.VISIBLE : View.GONE);
+        panelQuality.setVisibility(idx == 5 ? View.VISIBLE : View.GONE);
 
-        float totalSec = Math.max(1f, selectedVideo.durationMs / 1000f);
+        iconToolTrim.setBackgroundResource(idx == 0 ? R.drawable.bg_tool_circle_active : R.drawable.bg_tool_circle);
+        iconToolRotate.setBackgroundResource(idx == 1 ? R.drawable.bg_tool_circle_active : R.drawable.bg_tool_circle);
+        iconToolFormat.setBackgroundResource(idx == 2 ? R.drawable.bg_tool_circle_active : R.drawable.bg_tool_circle);
+        iconToolAudio.setBackgroundResource(idx == 3 ? R.drawable.bg_tool_circle_active : R.drawable.bg_tool_circle);
+        iconToolSpeed.setBackgroundResource(idx == 4 ? R.drawable.bg_tool_circle_active : R.drawable.bg_tool_circle);
+        iconToolQuality.setBackgroundResource(idx == 5 ? R.drawable.bg_tool_circle_active : R.drawable.bg_tool_circle);
+    }
+
+    private AudioUtils.VideoInfo getActiveClip() {
+        if (clips.isEmpty() || activeClipIndex < 0 || activeClipIndex >= clips.size()) return null;
+        return clips.get(activeClipIndex);
+    }
+
+    private void refreshWorkspace() {
+        boolean empty = clips.isEmpty();
+        cardEmpty.setVisibility(empty ? View.VISIBLE : View.GONE);
+        layoutWorkspace.setVisibility(empty ? View.GONE : View.VISIBLE);
+        cardResult.setVisibility(View.GONE);
+        if (empty) return;
+
+        clipAdapter.setSelectedIndex(activeClipIndex);
+        btnStartExport.setText(clips.size() > 1
+                ? ("Сохранить видео (" + clips.size() + " клипов)")
+                : "Сохранить видео MP4");
+        updateTotalDurationHeader();
+        bindActiveClip();
+    }
+
+    private void updateTotalDurationHeader() {
+        long total = 0;
+        for (AudioUtils.VideoInfo c : clips) total += c.getEffectiveDurationMs();
+        tvTotalTimelineDur.setText("Всего: " + AudioUtils.formatTimeMs(total));
+    }
+
+    private void bindActiveClip() {
+        AudioUtils.VideoInfo clip = getActiveClip();
+        if (clip == null) return;
+
+        isUpdatingUi = true;
+        tvActiveClipName.setText((activeClipIndex + 1) + ". " + clip.displayName);
+
+        float totalSec = Math.max(1f, clip.durationMs / 1000f);
+        float sSec = Math.max(0f, Math.min(clip.trimStartMs / 1000f, totalSec - 0.5f));
+        float eSec = Math.max(sSec + 0.5f, Math.min(clip.trimEndMs / 1000f, totalSec));
         rangeSlider.setValueFrom(0f);
         rangeSlider.setValueTo(totalSec);
-        rangeSlider.setValues(0f, totalSec);
+        rangeSlider.setValues(sSec, eSec);
+
+        if (clip.extraRotateDeg == 90) chipGroupRotate.check(R.id.chipRot90);
+        else if (clip.extraRotateDeg == 180) chipGroupRotate.check(R.id.chipRot180);
+        else if (clip.extraRotateDeg == 270) chipGroupRotate.check(R.id.chipRot270);
+        else chipGroupRotate.check(R.id.chipRot0);
+
+        switchFlipH.setChecked(clip.flipH);
+        switchFlipV.setChecked(clip.flipV);
+        isUpdatingUi = false;
+
         updateTrimLabels();
-
-        etOutputName.setText(AudioUtils.stripExtension(selectedVideo.displayName) + "_edit");
-
-        layoutPreviewBox.setVisibility(View.VISIBLE);
-        cardTransform.setVisibility(View.VISIBLE);
-        cardAudioSpeed.setVisibility(View.VISIBLE);
-        btnStartExport.setEnabled(true);
-        cardResult.setVisibility(View.GONE);
+        applyVisualPreviewTransform();
 
         try {
-            videoView.setVideoURI(selectedVideo.uri);
+            videoView.setVideoURI(clip.uri);
             videoView.setOnPreparedListener(mp -> {
-                videoView.seekTo(100);
+                videoView.seekTo((int) clip.trimStartMs);
                 applyVisualPreviewTransform();
             });
             videoView.setOnCompletionListener(mp -> pauseVideoPreview());
@@ -442,52 +484,59 @@ public class VideoFragment extends Fragment {
         }
     }
 
+    private void updateTrimLabels() {
+        AudioUtils.VideoInfo clip = getActiveClip();
+        if (clip == null) return;
+        String s = AudioUtils.formatTimeMs(clip.trimStartMs);
+        String e = AudioUtils.formatTimeMs(clip.trimEndMs);
+        tvActiveTrimRange.setText(s + " — " + e);
+        tvVideoStart.setText("Начало: " + s);
+        tvVideoEnd.setText("Конец: " + e);
+        tvVideoDuration.setText("Длина: " + AudioUtils.formatTimeMs(clip.getEffectiveDurationMs()));
+    }
+
     private void applyVisualPreviewTransform() {
-        if (videoView == null) return;
-        videoView.setRotation(rotateDeg);
-        videoView.setScaleX(flipH ? -1f : 1f);
-        videoView.setScaleY(flipV ? -1f : 1f);
-        if (rotateDeg != 0 || flipH || flipV) {
-            StringBuilder badge = new StringBuilder();
-            if (rotateDeg != 0) badge.append(rotateDeg).append("°");
-            if (flipH) {
-                if (badge.length() > 0) badge.append(" ");
-                badge.append("↔");
-            }
-            if (flipV) {
-                if (badge.length() > 0) badge.append(" ");
-                badge.append("↕");
-            }
-            tvPreviewBadge.setText(badge.toString());
-            tvPreviewBadge.setVisibility(View.VISIBLE);
+        AudioUtils.VideoInfo clip = getActiveClip();
+        if (videoView == null || clip == null) return;
+        videoView.setRotation(clip.extraRotateDeg);
+        videoView.setScaleX(clip.flipH ? -1f : 1f);
+        videoView.setScaleY(clip.flipV ? -1f : 1f);
+        if (clip.extraRotateDeg != 0 || clip.flipH || clip.flipV) {
+            StringBuilder b = new StringBuilder();
+            if (clip.extraRotateDeg != 0) b.append(clip.extraRotateDeg).append("°");
+            if (clip.flipH) { if (b.length() > 0) b.append(" "); b.append("↔"); }
+            if (clip.flipV) { if (b.length() > 0) b.append(" "); b.append("↕"); }
+            tvVideoPreviewBadge.setText(b.toString());
+            tvVideoPreviewBadge.setVisibility(View.VISIBLE);
         } else {
-            tvPreviewBadge.setVisibility(View.GONE);
+            tvVideoPreviewBadge.setVisibility(View.GONE);
         }
     }
 
-    private void adjustTrim(float deltaStart, float deltaEnd) {
-        if (selectedVideo == null) return;
-        List<Float> vals = rangeSlider.getValues();
-        float minV = rangeSlider.getValueFrom();
-        float maxV = rangeSlider.getValueTo();
-        float start = Math.max(minV, Math.min(vals.get(0) + deltaStart, vals.get(1) - 0.5f));
-        float end = Math.min(maxV, Math.max(vals.get(1) + deltaEnd, start + 0.5f));
-        rangeSlider.setValues(start, end);
-        updateTrimLabels();
+    private void nudgePlayhead(int deltaMs) {
+        AudioUtils.VideoInfo clip = getActiveClip();
+        if (clip == null || videoView == null) return;
         try {
-            videoView.seekTo(Math.round((deltaStart != 0 ? start : end) * 1000f));
+            int cur = videoView.getCurrentPosition();
+            int next = (int) Math.max(clip.trimStartMs, Math.min(clip.trimEndMs, cur + deltaMs));
+            videoView.seekTo(next);
         } catch (Exception ignored) {
         }
     }
 
-    private void updateTrimLabels() {
-        List<Float> vals = rangeSlider.getValues();
-        if (vals.size() < 2) return;
-        long sMs = Math.round(vals.get(0) * 1000f);
-        long eMs = Math.round(vals.get(1) * 1000f);
-        tvStart.setText("Начало: " + AudioUtils.formatTimeMs(sMs));
-        tvEnd.setText("Конец: " + AudioUtils.formatTimeMs(eMs));
-        tvDuration.setText("Длина: " + AudioUtils.formatTimeMs(Math.max(0, eMs - sMs)));
+    private void playClipEnding() {
+        AudioUtils.VideoInfo clip = getActiveClip();
+        if (clip == null || videoView == null) return;
+        int jump = (int) Math.max(clip.trimStartMs, clip.trimEndMs - 5000L);
+        try {
+            videoView.seekTo(jump);
+            videoView.start();
+            isPlayingPreview = true;
+            btnCenterPlayPause.setImageResource(R.drawable.ic_pause);
+            btnQuickPlay.setText("Пауза");
+            handler.post(previewUpdater);
+        } catch (Exception ignored) {
+        }
     }
 
     private void toggleVideoPreview() {
@@ -495,39 +544,20 @@ public class VideoFragment extends Fragment {
             pauseVideoPreview();
             return;
         }
-        if (selectedVideo == null) return;
-        List<Float> vals = rangeSlider.getValues();
-        int startMs = Math.round(vals.get(0) * 1000f);
-        int endMs = Math.round(vals.get(1) * 1000f);
+        AudioUtils.VideoInfo clip = getActiveClip();
+        if (clip == null) return;
         try {
             int cur = videoView.getCurrentPosition();
-            if (cur < startMs || cur >= endMs - 200) {
-                videoView.seekTo(startMs);
+            if (cur < clip.trimStartMs || cur >= clip.trimEndMs - 200) {
+                videoView.seekTo((int) clip.trimStartMs);
             }
             videoView.start();
             isPlayingPreview = true;
-            btnPlayPause.setText("Пауза");
-            btnPlayPause.setIconResource(R.drawable.ic_pause);
+            btnCenterPlayPause.setImageResource(R.drawable.ic_pause);
+            btnQuickPlay.setText("Пауза");
             handler.post(previewUpdater);
         } catch (Exception e) {
-            Toast.makeText(getContext(), "Не удалось воспроизвести видео", Toast.LENGTH_SHORT).show();
-        }
-    }
-
-    private void playVideoEnding() {
-        if (selectedVideo == null) return;
-        List<Float> vals = rangeSlider.getValues();
-        int startMs = Math.round(vals.get(0) * 1000f);
-        int endMs = Math.round(vals.get(1) * 1000f);
-        int jumpMs = Math.max(startMs, endMs - 5000);
-        try {
-            videoView.seekTo(jumpMs);
-            videoView.start();
-            isPlayingPreview = true;
-            btnPlayPause.setText("Пауза");
-            btnPlayPause.setIconResource(R.drawable.ic_pause);
-            handler.post(previewUpdater);
-        } catch (Exception ignored) {
+            Toast.makeText(getContext(), "Не удалось воспроизвести", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -540,28 +570,30 @@ public class VideoFragment extends Fragment {
             } catch (Exception ignored) {
             }
         }
-        if (btnPlayPause != null) {
-            btnPlayPause.setText("Играть");
-            btnPlayPause.setIconResource(R.drawable.ic_play);
-        }
+        if (btnCenterPlayPause != null) btnCenterPlayPause.setImageResource(R.drawable.ic_play);
+        if (btnQuickPlay != null) btnQuickPlay.setText("Играть");
     }
 
-    private void refreshMergeUi() {
-        mergeAdapter.notifyDataSetChanged();
-        boolean hasItems = !mergeVideos.isEmpty();
-        tvMergeEmpty.setVisibility(hasItems ? View.GONE : View.VISIBLE);
-        btnClearMerge.setVisibility(hasItems ? View.VISIBLE : View.GONE);
-        btnStartMerge.setEnabled(mergeVideos.size() >= 2);
-        cardResult.setVisibility(View.GONE);
-    }
-
-    private int[] computeTargetSize(int aspect, int resPref) {
+    private int[] computeTargetSize(int aspect, int resPref, AudioUtils.VideoInfo refClip) {
         int r = (resPref == 0) ? 720 : resPref;
-        if (aspect == ASPECT_16_9) {
-            if (r == 1080) return new int[]{1920, 1080};
-            if (r == 480) return new int[]{854, 480};
-            return new int[]{1280, 720};
-        } else if (aspect == ASPECT_9_16) {
+        if (aspect == ASPECT_ORIG && refClip != null && refClip.getDisplayWidth() > 0 && refClip.getDisplayHeight() > 0) {
+            int rw = refClip.getDisplayWidth();
+            int rh = refClip.getDisplayHeight();
+            if (refClip.extraRotateDeg == 90 || refClip.extraRotateDeg == 270) {
+                int t = rw; rw = rh; rh = t;
+            }
+            if (resPref > 0) {
+                if (rw >= rh) {
+                    int w = Math.round(rw * (resPref / (float) rh)) / 2 * 2;
+                    return new int[]{Math.max(2, w), resPref / 2 * 2};
+                } else {
+                    int h = Math.round(rh * (resPref / (float) rw)) / 2 * 2;
+                    return new int[]{resPref / 2 * 2, Math.max(2, h)};
+                }
+            }
+            return new int[]{(rw / 2) * 2, (rh / 2) * 2};
+        }
+        if (aspect == ASPECT_9_16) {
             if (r == 1080) return new int[]{1080, 1920};
             if (r == 480) return new int[]{480, 854};
             return new int[]{720, 1280};
@@ -569,31 +601,32 @@ public class VideoFragment extends Fragment {
             if (r == 1080) return new int[]{1080, 1080};
             if (r == 480) return new int[]{480, 480};
             return new int[]{720, 720};
-        } else { // 4:5
+        } else if (aspect == ASPECT_4_5) {
             if (r == 1080) return new int[]{1080, 1350};
             if (r == 480) return new int[]{480, 600};
             return new int[]{720, 900};
+        } else { // 16:9 default
+            if (r == 1080) return new int[]{1920, 1080};
+            if (r == 480) return new int[]{854, 480};
+            return new int[]{1280, 720};
         }
     }
 
-    private void extractMp3FromSelectedVideo() {
-        if (selectedVideo == null || getContext() == null) return;
+    private void extractMp3FromActiveClip() {
+        AudioUtils.VideoInfo clip = getActiveClip();
+        if (clip == null || getContext() == null) return;
         pauseVideoPreview();
 
-        List<Float> vals = rangeSlider.getValues();
-        float startSec = vals.get(0);
-        float endSec = vals.get(1);
-        long clipDurMs = Math.round((endSec - startSec) * 1000f);
-        String baseName = AudioUtils.stripExtension(selectedVideo.displayName) + "_audio";
+        long clipDurMs = clip.getEffectiveDurationMs();
+        String baseName = AudioUtils.stripExtension(clip.displayName) + "_audio";
         final Context appCtx = requireContext().getApplicationContext();
-
         beginTaskUi("Извлечение MP3", "Подготовка видео...");
 
         executor.execute(() -> {
             File inTemp = null;
             File outTemp = null;
             try {
-                inTemp = AudioUtils.copyUriToCacheWithExt(appCtx, selectedVideo.uri, "vid_ext", ".mp4");
+                inTemp = AudioUtils.copyUriToCacheWithExt(appCtx, clip.uri, "vid_ext", ".mp4");
                 if (isCancelled.get()) {
                     //noinspection ResultOfMethodCallIgnored
                     inTemp.delete();
@@ -604,8 +637,8 @@ public class VideoFragment extends Fragment {
 
                 String[] args = new String[]{
                         "-y",
-                        "-ss", String.format(Locale.US, "%.2f", startSec),
-                        "-to", String.format(Locale.US, "%.2f", endSec),
+                        "-ss", String.format(Locale.US, "%.2f", clip.trimStartMs / 1000.0),
+                        "-t", String.format(Locale.US, "%.2f", clipDurMs / 1000.0),
                         "-i", inTemp.getAbsolutePath(),
                         "-vn",
                         "-c:a", "libmp3lame",
@@ -613,8 +646,8 @@ public class VideoFragment extends Fragment {
                         outTemp.getAbsolutePath()
                 };
 
-                final File finalIn = inTemp;
-                final File finalOut = outTemp;
+                final File fIn = inTemp;
+                final File fOut = outTemp;
                 final long[] lastNotif = {0L};
 
                 var session = FFmpegKit.executeWithArgumentsAsync(args,
@@ -623,30 +656,27 @@ public class VideoFragment extends Fragment {
                             AudioProcessingService.stopTask(appCtx);
                             if (isCancelled.get() || ReturnCode.isCancel(s.getReturnCode())) {
                                 finishCancelled(appCtx, "Извлечение отменено");
-                            } else if (ReturnCode.isSuccess(s.getReturnCode()) && finalOut.exists()) {
+                            } else if (ReturnCode.isSuccess(s.getReturnCode()) && fOut.exists()) {
                                 try {
-                                    long sz = finalOut.length();
-                                    AudioUtils.SaveResult res = AudioUtils.saveMp3Output(appCtx, finalOut, baseName);
+                                    long sz = fOut.length();
+                                    AudioUtils.SaveResult res = AudioUtils.saveMp3Output(appCtx, fOut, baseName);
                                     lastResultUri = res.uri;
                                     lastResultIsVideo = false;
                                     runUi(() -> {
                                         finishUiButtons();
                                         cardResult.setVisibility(View.VISIBLE);
-                                        tvResultInfo.setText(
-                                                "MP3 извлечён! Сохранено в " + res.displayPath + "\n" +
-                                                "Размер: " + AudioUtils.formatSize(sz) + " (192 кбит/с)"
-                                        );
+                                        tvResultInfo.setText("MP3 извлечён! Сохранено в " + res.displayPath + "\nРазмер: " + AudioUtils.formatSize(sz));
                                     });
                                 } catch (Exception e) {
-                                    finishError("Ошибка сохранения MP3: " + e.getMessage());
+                                    finishError("Ошибка сохранения: " + e.getMessage());
                                 }
                             } else {
-                                finishError("В этом видео нет звуковой дорожки или ошибка FFmpeg");
+                                finishError("В клипе нет звука или ошибка FFmpeg");
                             }
-                            //noinspection ResultOfMethodCallIgnored
-                            finalIn.delete();
-                            //noinspection ResultOfMethodCallIgnored
-                            finalOut.delete();
+                            if (fIn != null) //noinspection ResultOfMethodCallIgnored
+                                fIn.delete();
+                            if (fOut != null) //noinspection ResultOfMethodCallIgnored
+                                fOut.delete();
                         },
                         log -> {},
                         stats -> updateTaskProgress(appCtx, "Извлечение MP3", stats.getTime(), clipDurMs, lastNotif)
@@ -664,147 +694,171 @@ public class VideoFragment extends Fragment {
         });
     }
 
-    private void startVideoExport() {
-        if (selectedVideo == null || getContext() == null) return;
+    private void startUnifiedExport() {
+        if (clips.isEmpty() || getContext() == null) return;
         pauseVideoPreview();
 
         if (audioMode == AUDIO_CUSTOM && customAudioUri == null) {
-            Toast.makeText(getContext(), "Сначала выберите MP3 для наложения", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        List<Float> vals = rangeSlider.getValues();
-        float startSec = vals.get(0);
-        float endSec = vals.get(1);
-        long rawClipMs = Math.round((endSec - startSec) * 1000f);
-        if (rawClipMs < 300) {
-            Toast.makeText(getContext(), "Выберите отрезок длиннее 0.3 сек", Toast.LENGTH_SHORT).show();
+            Toast.makeText(getContext(), "Выберите MP3 во вкладке «Звук»", Toast.LENGTH_SHORT).show();
+            selectTool(3);
             return;
         }
 
         String outName = etOutputName.getText() != null ? etOutputName.getText().toString().trim() : "";
-        if (outName.isEmpty()) outName = AudioUtils.stripExtension(selectedVideo.displayName) + "_edit";
+        if (outName.isEmpty()) outName = AudioUtils.stripExtension(clips.get(0).displayName) + "_edit";
 
         final String finalOutName = outName;
-        final int fRot = rotateDeg;
-        final boolean fFlipH = flipH;
-        final boolean fFlipV = flipV;
+        final List<AudioUtils.VideoInfo> snapshot = new ArrayList<>(clips);
         final int fAspect = aspectMode;
         final int fFill = fillMode;
         final int fAudio = audioMode;
         final double fSpeed = speedFactor;
         final int fRes = targetRes;
         final Uri fCustomAudio = customAudioUri;
-        final boolean fHasOrigAudio = selectedVideo.hasAudio;
-        final long expectedOutMs = Math.round(rawClipMs / fSpeed);
         final Context appCtx = requireContext().getApplicationContext();
 
-        boolean fastCopyOnly = (fRot == 0 && !fFlipH && !fFlipV && fAspect == ASPECT_ORIG
-                && fAudio == AUDIO_ORIG && Math.abs(fSpeed - 1.0) < 0.01 && fRes == 0);
+        long totalRawMs = 0;
+        boolean anyHasAudio = false;
+        for (AudioUtils.VideoInfo c : snapshot) {
+            totalRawMs += c.getEffectiveDurationMs();
+            if (c.hasAudio) anyHasAudio = true;
+        }
+        final long expectedOutMs = Math.round(totalRawMs / fSpeed);
+        final boolean includeOrigAudio = (fAudio == AUDIO_ORIG && anyHasAudio);
 
-        beginTaskUi("Обработка видео", "Подготовка видео...");
+        boolean singleFastCopy = (snapshot.size() == 1
+                && snapshot.get(0).extraRotateDeg == 0
+                && !snapshot.get(0).flipH
+                && !snapshot.get(0).flipV
+                && fAspect == ASPECT_ORIG
+                && fAudio == AUDIO_ORIG
+                && Math.abs(fSpeed - 1.0) < 0.01
+                && fRes == 0);
+
+        beginTaskUi("Сохранение видео", "Подготовка (" + snapshot.size() + " клип.)...");
 
         executor.execute(() -> {
-            File inVid = null;
+            List<File> tempVids = new ArrayList<>();
             File inAud = null;
             File outVid = null;
             try {
-                inVid = AudioUtils.copyUriToCacheWithExt(appCtx, selectedVideo.uri, "vid_in", ".mp4");
+                for (int i = 0; i < snapshot.size(); i++) {
+                    if (isCancelled.get()) {
+                        for (File f : tempVids) //noinspection ResultOfMethodCallIgnored
+                            f.delete();
+                        finishCancelled(appCtx, "Обработка отменена");
+                        return;
+                    }
+                    tempVids.add(AudioUtils.copyUriToCacheWithExt(appCtx, snapshot.get(i).uri, "vclip_" + i, ".mp4"));
+                }
                 if (fAudio == AUDIO_CUSTOM && fCustomAudio != null) {
-                    inAud = AudioUtils.copyUriToCacheWithExt(appCtx, fCustomAudio, "vid_aud", ".mp3");
+                    inAud = AudioUtils.copyUriToCacheWithExt(appCtx, fCustomAudio, "vaud", ".mp3");
                 }
-                if (isCancelled.get()) {
-                    if (inVid != null) //noinspection ResultOfMethodCallIgnored
-                        inVid.delete();
-                    if (inAud != null) //noinspection ResultOfMethodCallIgnored
-                        inAud.delete();
-                    finishCancelled(appCtx, "Обработка отменена");
-                    return;
-                }
-                outVid = new File(appCtx.getCacheDir(), "vid_out_" + System.currentTimeMillis() + ".mp4");
-
-                String ssStr = String.format(Locale.US, "%.2f", startSec);
-                String tStr = String.format(Locale.US, "%.2f", rawClipMs / 1000.0);
+                outVid = new File(appCtx.getCacheDir(), "vout_" + System.currentTimeMillis() + ".mp4");
 
                 List<String> args = new ArrayList<>();
                 args.add("-y");
-                args.add("-ss");
-                args.add(ssStr);
-                args.add("-t");
-                args.add(tStr);
-                args.add("-i");
-                args.add(inVid.getAbsolutePath());
 
-                if (fastCopyOnly) {
+                if (singleFastCopy) {
+                    AudioUtils.VideoInfo c0 = snapshot.get(0);
+                    args.add("-ss");
+                    args.add(String.format(Locale.US, "%.2f", c0.trimStartMs / 1000.0));
+                    args.add("-t");
+                    args.add(String.format(Locale.US, "%.2f", c0.getEffectiveDurationMs() / 1000.0));
+                    args.add("-i");
+                    args.add(tempVids.get(0).getAbsolutePath());
                     args.add("-c");
                     args.add("copy");
                     args.add("-movflags");
                     args.add("+faststart");
                     args.add(outVid.getAbsolutePath());
                 } else {
+                    for (int i = 0; i < snapshot.size(); i++) {
+                        AudioUtils.VideoInfo c = snapshot.get(i);
+                        args.add("-ss");
+                        args.add(String.format(Locale.US, "%.2f", c.trimStartMs / 1000.0));
+                        args.add("-t");
+                        args.add(String.format(Locale.US, "%.2f", c.getEffectiveDurationMs() / 1000.0));
+                        args.add("-i");
+                        args.add(tempVids.get(i).getAbsolutePath());
+                    }
+                    int customAudioInputIdx = -1;
                     if (fAudio == AUDIO_CUSTOM && inAud != null) {
+                        customAudioInputIdx = snapshot.size();
                         args.add("-i");
                         args.add(inAud.getAbsolutePath());
                     }
 
-                    // Build base video chain (rotate, flip, speed)
-                    List<String> baseV = new ArrayList<>();
-                    if (fRot == 90) baseV.add("transpose=1");
-                    else if (fRot == 180) {
-                        baseV.add("transpose=1");
-                        baseV.add("transpose=1");
-                    } else if (fRot == 270) baseV.add("transpose=2");
+                    int[] wh = computeTargetSize(fAspect, fRes, snapshot.get(0));
+                    int W = wh[0], H = wh[1];
 
-                    if (fFlipH) baseV.add("hflip");
-                    if (fFlipV) baseV.add("vflip");
-                    if (Math.abs(fSpeed - 1.0) > 0.01) {
-                        baseV.add(String.format(Locale.US, "setpts=%.4f*PTS", 1.0 / fSpeed));
-                    }
-
-                    String baseChain = String.join(",", baseV);
                     StringBuilder fc = new StringBuilder();
+                    StringBuilder concatIn = new StringBuilder();
 
-                    if (fAspect != ASPECT_ORIG) {
-                        int[] wh = computeTargetSize(fAspect, fRes);
-                        int W = wh[0], H = wh[1];
-                        String prefix = baseChain.isEmpty() ? "[0:v]" : ("[0:v]" + baseChain + ",");
-                        if (fFill == FILL_BLUR) {
+                    for (int i = 0; i < snapshot.size(); i++) {
+                        AudioUtils.VideoInfo c = snapshot.get(i);
+                        List<String> baseV = new ArrayList<>();
+                        if (c.extraRotateDeg == 90) baseV.add("transpose=1");
+                        else if (c.extraRotateDeg == 180) {
+                            baseV.add("transpose=1");
+                            baseV.add("transpose=1");
+                        } else if (c.extraRotateDeg == 270) baseV.add("transpose=2");
+                        if (c.flipH) baseV.add("hflip");
+                        if (c.flipV) baseV.add("vflip");
+                        if (Math.abs(fSpeed - 1.0) > 0.01) {
+                            baseV.add(String.format(Locale.US, "setpts=%.4f*PTS", 1.0 / fSpeed));
+                        }
+                        String prefix = baseV.isEmpty() ? ("[" + i + ":v]") : ("[" + i + ":v]" + String.join(",", baseV) + ",");
+
+                        if (fFill == FILL_BLUR && fAspect != ASPECT_ORIG) {
                             fc.append(prefix)
-                              .append("split=2[bg][fg];")
-                              .append("[bg]scale=").append(W).append(":").append(H)
+                              .append("split=2[bg").append(i).append("][fg").append(i).append("];")
+                              .append("[bg").append(i).append("]scale=").append(W).append(":").append(H)
                               .append(":force_original_aspect_ratio=increase,crop=").append(W).append(":").append(H)
-                              .append(",boxblur=20:5[bgb];")
-                              .append("[fg]scale=").append(W).append(":").append(H)
-                              .append(":force_original_aspect_ratio=decrease[fgf];")
-                              .append("[bgb][fgf]overlay=(W-w)/2:(H-h)/2,setsar=1,format=yuv420p[vout]");
-                        } else if (fFill == FILL_CROP) {
+                              .append(",boxblur=20:5[bgb").append(i).append("];")
+                              .append("[fg").append(i).append("]scale=").append(W).append(":").append(H)
+                              .append(":force_original_aspect_ratio=decrease[fgf").append(i).append("];")
+                              .append("[bgb").append(i).append("][fgf").append(i).append("]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=30,format=yuv420p[v").append(i).append("];");
+                        } else if (fFill == FILL_CROP && fAspect != ASPECT_ORIG) {
                             fc.append(prefix)
                               .append("scale=").append(W).append(":").append(H)
                               .append(":force_original_aspect_ratio=increase,crop=").append(W).append(":").append(H)
-                              .append(",setsar=1,format=yuv420p[vout]");
+                              .append(",setsar=1,fps=30,format=yuv420p[v").append(i).append("];");
                         } else {
                             fc.append(prefix)
                               .append("scale=").append(W).append(":").append(H)
                               .append(":force_original_aspect_ratio=decrease,pad=").append(W).append(":").append(H)
-                              .append(":(ow-iw)/2:(oh-ih)/2:black,setsar=1,format=yuv420p[vout]");
+                              .append(":(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30,format=yuv420p[v").append(i).append("];");
                         }
-                    } else {
-                        String prefix = baseChain.isEmpty() ? "[0:v]" : ("[0:v]" + baseChain + ",");
-                        if (fRes > 0) {
-                            fc.append(prefix)
-                              .append("scale='if(gte(iw,ih),-2,").append(fRes)
-                              .append(")':'if(gte(iw,ih),").append(fRes)
-                              .append(",-2)',format=yuv420p[vout]");
+
+                        if (includeOrigAudio) {
+                            if (c.hasAudio) {
+                                fc.append("[").append(i).append(":a]");
+                                if (Math.abs(fSpeed - 1.0) > 0.01) {
+                                    fc.append("atempo=").append(String.format(Locale.US, "%.2f", fSpeed)).append(",");
+                                }
+                                fc.append("aformat=sample_rates=44100:channel_layouts=stereo[a").append(i).append("];");
+                            } else {
+                                double dSec = Math.max(0.3, (c.getEffectiveDurationMs() / 1000.0) / fSpeed);
+                                fc.append("anullsrc=r=44100:cl=stereo,atrim=0:")
+                                  .append(String.format(Locale.US, "%.2f", dSec))
+                                  .append(",asetpts=PTS-STARTPTS[a").append(i).append("];");
+                            }
+                            concatIn.append("[v").append(i).append("][a").append(i).append("]");
                         } else {
-                            fc.append(prefix).append("scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p[vout]");
+                            concatIn.append("[v").append(i).append("]");
                         }
                     }
 
-                    boolean mapCustomAudio = (fAudio == AUDIO_CUSTOM && inAud != null);
-                    boolean mapOrigAudio = (fAudio == AUDIO_ORIG && fHasOrigAudio);
-
-                    if (mapOrigAudio && Math.abs(fSpeed - 1.0) > 0.01) {
-                        fc.append(";[0:a]atempo=").append(String.format(Locale.US, "%.2f", fSpeed)).append("[aout]");
+                    if (snapshot.size() == 1) {
+                        fc.append("[v0]null[vout]");
+                        if (includeOrigAudio) fc.append(";[a0]anull[aout]");
+                    } else {
+                        if (includeOrigAudio) {
+                            fc.append(concatIn).append("concat=n=").append(snapshot.size()).append(":v=1:a=1[vout][aout]");
+                        } else {
+                            fc.append(concatIn).append("concat=n=").append(snapshot.size()).append(":v=1:a=0[vout]");
+                        }
                     }
 
                     args.add("-filter_complex");
@@ -812,22 +866,17 @@ public class VideoFragment extends Fragment {
                     args.add("-map");
                     args.add("[vout]");
 
-                    if (mapCustomAudio) {
+                    if (customAudioInputIdx >= 0) {
                         args.add("-map");
-                        args.add("1:a:0");
+                        args.add(customAudioInputIdx + ":a:0");
                         args.add("-c:a");
                         args.add("aac");
                         args.add("-b:a");
                         args.add("128k");
                         args.add("-shortest");
-                    } else if (mapOrigAudio) {
-                        if (Math.abs(fSpeed - 1.0) > 0.01) {
-                            args.add("-map");
-                            args.add("[aout]");
-                        } else {
-                            args.add("-map");
-                            args.add("0:a:0");
-                        }
+                    } else if (includeOrigAudio) {
+                        args.add("-map");
+                        args.add("[aout]");
                         args.add("-c:a");
                         args.add("aac");
                         args.add("-b:a");
@@ -847,7 +896,6 @@ public class VideoFragment extends Fragment {
                     args.add(outVid.getAbsolutePath());
                 }
 
-                final File fInVid = inVid;
                 final File fInAud = inAud;
                 final File fOutVid = outVid;
                 final long[] lastNotif = {0L};
@@ -855,7 +903,7 @@ public class VideoFragment extends Fragment {
                 runUi(() -> {
                     progressBar.setIndeterminate(false);
                     progressBar.setProgress(0);
-                    tvStatus.setText("Обработка видео: 0%");
+                    tvStatus.setText("Сохранение видео: 0%");
                 });
 
                 var session = FFmpegKit.executeWithArgumentsAsync(args.toArray(new String[0]),
@@ -863,7 +911,7 @@ public class VideoFragment extends Fragment {
                             activeSessionId = -1;
                             AudioProcessingService.stopTask(appCtx);
                             if (isCancelled.get() || ReturnCode.isCancel(s.getReturnCode())) {
-                                finishCancelled(appCtx, "Обработка видео отменена");
+                                finishCancelled(appCtx, "Сохранение видео отменено");
                             } else if (ReturnCode.isSuccess(s.getReturnCode()) && fOutVid.exists() && fOutVid.length() > 0) {
                                 try {
                                     long sz = fOutVid.length();
@@ -874,7 +922,7 @@ public class VideoFragment extends Fragment {
                                         finishUiButtons();
                                         cardResult.setVisibility(View.VISIBLE);
                                         tvResultInfo.setText(
-                                                "Видео готово! Сохранено в " + res.displayPath + "\n" +
+                                                "Готово! Сохранено в " + res.displayPath + "\n" +
                                                 "Размер: " + AudioUtils.formatSize(sz)
                                         );
                                     });
@@ -884,182 +932,27 @@ public class VideoFragment extends Fragment {
                             } else {
                                 finishError("Ошибка FFmpeg при обработке видео");
                             }
-                            if (fInVid != null) //noinspection ResultOfMethodCallIgnored
-                                fInVid.delete();
+                            for (File f : tempVids) //noinspection ResultOfMethodCallIgnored
+                                f.delete();
                             if (fInAud != null) //noinspection ResultOfMethodCallIgnored
                                 fInAud.delete();
                             if (fOutVid != null) //noinspection ResultOfMethodCallIgnored
                                 fOutVid.delete();
                         },
                         log -> {},
-                        stats -> updateTaskProgress(appCtx, "Обработка видео", stats.getTime(), expectedOutMs, lastNotif)
+                        stats -> updateTaskProgress(appCtx, "Сохранение видео", stats.getTime(), expectedOutMs, lastNotif)
                 );
                 activeSessionId = session.getSessionId();
             } catch (Exception e) {
                 activeSessionId = -1;
                 AudioProcessingService.stopTask(appCtx);
-                if (inVid != null) //noinspection ResultOfMethodCallIgnored
-                    inVid.delete();
+                for (File f : tempVids) //noinspection ResultOfMethodCallIgnored
+                    f.delete();
                 if (inAud != null) //noinspection ResultOfMethodCallIgnored
                     inAud.delete();
                 if (outVid != null) //noinspection ResultOfMethodCallIgnored
                     outVid.delete();
-                finishError("Ошибка подготовки видео: " + e.getMessage());
-            }
-        });
-    }
-
-    private void startVideoMerge() {
-        if (mergeVideos.size() < 2 || getContext() == null) return;
-        pauseVideoPreview();
-
-        String outName = etMergeOutputName.getText() != null ? etMergeOutputName.getText().toString().trim() : "";
-        if (outName.isEmpty()) outName = "merged_video_" + System.currentTimeMillis();
-
-        final String finalOutName = outName;
-        final List<AudioUtils.VideoInfo> snapshot = new ArrayList<>(mergeVideos);
-        final int[] wh = computeTargetSize(mergeAspect, mergeRes);
-        final int W = wh[0], H = wh[1];
-        final Context appCtx = requireContext().getApplicationContext();
-
-        long totalMs = 0;
-        boolean anyHasAudio = false;
-        for (AudioUtils.VideoInfo v : snapshot) {
-            totalMs += v.durationMs;
-            if (v.hasAudio) anyHasAudio = true;
-        }
-        final long expectedMs = totalMs;
-        final boolean includeAudio = anyHasAudio;
-
-        beginTaskUi("Склейка видео", "Подготовка клипов (" + snapshot.size() + " шт.)...");
-
-        executor.execute(() -> {
-            List<File> tempFiles = new ArrayList<>();
-            File outVid = null;
-            try {
-                for (int i = 0; i < snapshot.size(); i++) {
-                    if (isCancelled.get()) {
-                        for (File f : tempFiles) //noinspection ResultOfMethodCallIgnored
-                            f.delete();
-                        finishCancelled(appCtx, "Склейка видео отменена");
-                        return;
-                    }
-                    tempFiles.add(AudioUtils.copyUriToCacheWithExt(appCtx, snapshot.get(i).uri, "vmerge_" + i, ".mp4"));
-                }
-                outVid = new File(appCtx.getCacheDir(), "vmerge_out_" + System.currentTimeMillis() + ".mp4");
-
-                List<String> args = new ArrayList<>();
-                args.add("-y");
-                StringBuilder fc = new StringBuilder();
-                StringBuilder concatIn = new StringBuilder();
-
-                for (int i = 0; i < tempFiles.size(); i++) {
-                    AudioUtils.VideoInfo vi = snapshot.get(i);
-                    args.add("-i");
-                    args.add(tempFiles.get(i).getAbsolutePath());
-
-                    fc.append("[").append(i).append(":v]")
-                      .append("scale=").append(W).append(":").append(H)
-                      .append(":force_original_aspect_ratio=decrease,pad=").append(W).append(":").append(H)
-                      .append(":(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30,format=yuv420p[v").append(i).append("];");
-
-                    if (includeAudio) {
-                        if (vi.hasAudio) {
-                            fc.append("[").append(i).append(":a]")
-                              .append("aformat=sample_rates=44100:channel_layouts=stereo[a").append(i).append("];");
-                        } else {
-                            double durSec = Math.max(0.5, vi.durationMs / 1000.0);
-                            fc.append("anullsrc=r=44100:cl=stereo,atrim=0:")
-                              .append(String.format(Locale.US, "%.2f", durSec))
-                              .append(",asetpts=PTS-STARTPTS[a").append(i).append("];");
-                        }
-                        concatIn.append("[v").append(i).append("][a").append(i).append("]");
-                    } else {
-                        concatIn.append("[v").append(i).append("]");
-                    }
-                }
-
-                if (includeAudio) {
-                    fc.append(concatIn).append("concat=n=").append(tempFiles.size()).append(":v=1:a=1[vout][aout]");
-                } else {
-                    fc.append(concatIn).append("concat=n=").append(tempFiles.size()).append(":v=1:a=0[vout]");
-                }
-
-                args.add("-filter_complex");
-                args.add(fc.toString());
-                args.add("-map");
-                args.add("[vout]");
-                if (includeAudio) {
-                    args.add("-map");
-                    args.add("[aout]");
-                    args.add("-c:a");
-                    args.add("aac");
-                    args.add("-b:a");
-                    args.add("128k");
-                }
-                args.add("-c:v");
-                args.add("libx264");
-                args.add("-preset");
-                args.add("ultrafast");
-                args.add("-crf");
-                args.add("23");
-                args.add("-movflags");
-                args.add("+faststart");
-                args.add(outVid.getAbsolutePath());
-
-                final File fOutVid = outVid;
-                final long[] lastNotif = {0L};
-
-                runUi(() -> {
-                    progressBar.setIndeterminate(false);
-                    progressBar.setProgress(0);
-                    tvStatus.setText("Склейка видео: 0%");
-                });
-
-                var session = FFmpegKit.executeWithArgumentsAsync(args.toArray(new String[0]),
-                        s -> {
-                            activeSessionId = -1;
-                            AudioProcessingService.stopTask(appCtx);
-                            if (isCancelled.get() || ReturnCode.isCancel(s.getReturnCode())) {
-                                finishCancelled(appCtx, "Склейка видео отменена");
-                            } else if (ReturnCode.isSuccess(s.getReturnCode()) && fOutVid.exists() && fOutVid.length() > 0) {
-                                try {
-                                    long sz = fOutVid.length();
-                                    AudioUtils.SaveResult res = AudioUtils.saveMp4Output(appCtx, fOutVid, finalOutName);
-                                    lastResultUri = res.uri;
-                                    lastResultIsVideo = true;
-                                    runUi(() -> {
-                                        finishUiButtons();
-                                        cardResult.setVisibility(View.VISIBLE);
-                                        tvResultInfo.setText(
-                                                "Готово! Склеено видео: " + snapshot.size() + "\n" +
-                                                "Сохранено в " + res.displayPath + "\n" +
-                                                "Размер: " + AudioUtils.formatSize(sz)
-                                        );
-                                    });
-                                } catch (Exception e) {
-                                    finishError("Ошибка сохранения: " + e.getMessage());
-                                }
-                            } else {
-                                finishError("Ошибка FFmpeg при склейке видео");
-                            }
-                            for (File f : tempFiles) //noinspection ResultOfMethodCallIgnored
-                                f.delete();
-                            if (fOutVid != null) //noinspection ResultOfMethodCallIgnored
-                                fOutVid.delete();
-                        },
-                        log -> {},
-                        stats -> updateTaskProgress(appCtx, "Склейка видео", stats.getTime(), expectedMs, lastNotif)
-                );
-                activeSessionId = session.getSessionId();
-            } catch (Exception e) {
-                activeSessionId = -1;
-                AudioProcessingService.stopTask(appCtx);
-                for (File f : tempFiles) //noinspection ResultOfMethodCallIgnored
-                    f.delete();
-                if (outVid != null) //noinspection ResultOfMethodCallIgnored
-                    outVid.delete();
-                finishError("Ошибка подготовки клипов: " + e.getMessage());
+                finishError("Ошибка подготовки: " + e.getMessage());
             }
         });
     }
@@ -1069,7 +962,6 @@ public class VideoFragment extends Fragment {
         activeSessionId = -1;
         btnStartExport.setEnabled(false);
         btnExtractMp3.setEnabled(false);
-        btnStartMerge.setEnabled(false);
         btnCancel.setEnabled(true);
         cardResult.setVisibility(View.GONE);
         layoutProgress.setVisibility(View.VISIBLE);
@@ -1099,9 +991,8 @@ public class VideoFragment extends Fragment {
 
     private void finishUiButtons() {
         layoutProgress.setVisibility(View.GONE);
-        btnStartExport.setEnabled(selectedVideo != null);
-        btnExtractMp3.setEnabled(selectedVideo != null);
-        btnStartMerge.setEnabled(mergeVideos.size() >= 2);
+        btnStartExport.setEnabled(!clips.isEmpty());
+        btnExtractMp3.setEnabled(!clips.isEmpty());
         btnCancel.setEnabled(true);
     }
 
