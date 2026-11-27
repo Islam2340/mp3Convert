@@ -203,7 +203,7 @@
                 <com.mp3master.app.VideoFilmstripView
                     android:id="@+id/videoFilmstrip"
                     android:layout_width="0dp"
-                    android:layout_height="76dp"
+                    android:layout_height="92dp"
                     android:layout_weight="1" />
 
                 <ImageButton
@@ -222,7 +222,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="4dp"
                 android:gravity="center"
-                android:text="Смахните клип вверх или вниз, чтобы удалить"
+                android:text="Удерживайте клип для перемещения • Смахните вверх/вниз для удаления • Щипок для масштаба"
                 android:textColor="@color/text_secondary"
                 android:textSize="11sp" />
 
@@ -310,7 +310,7 @@
                 android:layout_height="0dp"
                 android:visibility="gone" />
 
-            <!-- Clip order / remove mini-bar (visible when >= 1 clip) -->
+            <!-- Scale readout & remove mini-bar -->
             <LinearLayout
                 android:id="@+id/layoutClipOrderBar"
                 android:layout_width="match_parent"
@@ -319,34 +319,14 @@
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnClipMoveLeft"
-                    style="@style/Widget.Material3.Button.TextButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="34dp"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    android:minWidth="0dp"
-                    android:paddingHorizontal="10dp"
-                    android:text="← Влево"
-                    android:textSize="11sp" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnClipMoveRight"
-                    style="@style/Widget.Material3.Button.TextButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="34dp"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    android:minWidth="0dp"
-                    android:paddingHorizontal="10dp"
-                    android:text="Вправо →"
-                    android:textSize="11sp" />
-
-                <View
+                <TextView
+                    android:id="@+id/tvVideoZoomLabel"
                     android:layout_width="0dp"
-                    android:layout_height="1dp"
-                    android:layout_weight="1" />
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Масштаб: весь"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="11sp" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnClipRemove"
