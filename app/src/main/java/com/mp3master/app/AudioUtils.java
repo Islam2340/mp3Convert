@@ -397,4 +397,162 @@ public class AudioUtils {
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         context.startActivity(Intent.createChooser(intent, "Поделиться MP3"));
     }
+
+    public static class VideoInfo {
+        public Uri uri;
+        public String displayName;
+        public long durationMs;
+        public long sizeBytes;
+        public int width;
+        public int height;
+        public int rotation;
+        public boolean hasAudio;
+
+        public int getDisplayWidth() {
+            return (rotation == 90 || rotation == 270) ? height : width;
+        }
+
+        public int getDisplayHeight() {
+            return (rotation == 90 || rotation == 270) ? width : height;
+        }
+    }
+
+    public static VideoInfo getVideoInfo(Context context, Uri uri) {
+        VideoInfo info = new VideoInfo();
+        info.uri = uri;
+        info.displayName = getFileName(context, uri);
+        info.sizeBytes = getFileSize(context, uri);
+        info.hasAudio = true;
+
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        try {
+            retriever.setDataSource(context, uri);
+            String dur = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION);
+            String w = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH);
+            String h = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT);
+            String rot = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION);
+            String hasAud = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_HAS_AUDIO);
+            if (dur != null) info.durationMs = Long.parseLong(dur);
+            if (w != null) info.width = Integer.parseInt(w);
+            if (h != null) info.height = Integer.parseInt(h);
+            if (rot != null) info.rotation = Integer.parseInt(rot);
+            if (hasAud != null) info.hasAudio = "yes".equalsIgnoreCase(hasAud);
+            else info.hasAudio = false;
+        } catch (Exception ignored) {
+        } finally {
+            try {
+                retriever.release();
+            } catch (Exception ignored) {
+            }
+        }
+        return info;
+    }
+
+    public static File copyUriToCacheWithExt(Context context, Uri uri, String prefix, String ext) throws IOException {
+        File outFile = new File(context.getCacheDir(), prefix + "_" + System.currentTimeMillis() + ext);
+        try (InputStream in = context.getContentResolver().openInputStream(uri);
+             OutputStream out = new FileOutputStream(outFile)) {
+            if (in == null) throw new IOException("Не удалось открыть файл");
+            byte[] buf = new byte[32768];
+            int len;
+            while ((len = in.read(buf)) > 0) {
+                out.write(buf, 0, len);
+            }
+        }
+        return outFile;
+    }
+
+    public static SaveResult saveMp4Output(Context context, File sourceFile, String outputBaseName) throws IOException {
+        String safeBase = sanitizeFileName(stripExtension(outputBaseName), "video_" + System.currentTimeMillis());
+        String safeName = safeBase + ".mp4";
+
+        Uri customTreeUri = getSaveFolderUri(context);
+        if (customTreeUri != null) {
+            DocumentFile folder = DocumentFile.fromTreeUri(context, customTreeUri);
+            if (folder != null && folder.exists() && folder.canWrite()) {
+                DocumentFile existing = folder.findFile(safeName);
+                String targetBase = safeBase;
+                if (existing != null) {
+                    targetBase = safeBase + "_" + (System.currentTimeMillis() % 10000);
+                }
+                DocumentFile created = folder.createFile("video/mp4", targetBase);
+                if (created != null) {
+                    try (InputStream in = new FileInputStream(sourceFile);
+                         OutputStream out = context.getContentResolver().openOutputStream(created.getUri())) {
+                        if (out == null) throw new IOException("Ошибка записи в выбранную папку");
+                        byte[] buf = new byte[32768];
+                        int len;
+                        while ((len = in.read(buf)) > 0) {
+                            out.write(buf, 0, len);
+                        }
+                    }
+                    String folderDisplay = getSaveFolderDisplayName(context);
+                    String actualName = created.getName() != null ? created.getName() : (targetBase + ".mp4");
+                    return new SaveResult(created.getUri(), folderDisplay + "/" + actualName);
+                }
+            }
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Video.Media.DISPLAY_NAME, safeName);
+            values.put(MediaStore.Video.Media.MIME_TYPE, "video/mp4");
+            values.put(MediaStore.Video.Media.RELATIVE_PATH, Environment.DIRECTORY_MOVIES + "/MP3Master");
+            values.put(MediaStore.Video.Media.IS_PENDING, 1);
+
+            Uri uri = context.getContentResolver().insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, values);
+            if (uri == null) {
+                throw new IOException("Не удалось создать файл в Movies/MP3Master");
+            }
+
+            try (InputStream in = new FileInputStream(sourceFile);
+                 OutputStream out = context.getContentResolver().openOutputStream(uri)) {
+                if (out == null) throw new IOException("Ошибка записи в MediaStore");
+                byte[] buf = new byte[32768];
+                int len;
+                while ((len = in.read(buf)) > 0) {
+                    out.write(buf, 0, len);
+                }
+            }
+
+            values.clear();
+            values.put(MediaStore.Video.Media.IS_PENDING, 0);
+            context.getContentResolver().update(uri, values, null, null);
+            return new SaveResult(uri, "Movies/MP3Master/" + safeName);
+        } else {
+            File moviesDir = new File(
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES),
+                    "MP3Master"
+            );
+            if (!moviesDir.exists()) {
+                //noinspection ResultOfMethodCallIgnored
+                moviesDir.mkdirs();
+            }
+            File dest = new File(moviesDir, safeName);
+            try (InputStream in = new FileInputStream(sourceFile);
+                 OutputStream out = new FileOutputStream(dest)) {
+                byte[] buf = new byte[32768];
+                int len;
+                while ((len = in.read(buf)) > 0) {
+                    out.write(buf, 0, len);
+                }
+            }
+            return new SaveResult(Uri.fromFile(dest), "Movies/MP3Master/" + safeName);
+        }
+    }
+
+    public static void openVideo(Context context, Uri uri) {
+        Intent intent = new Intent(Intent.ACTION_VIEW);
+        intent.setDataAndType(uri, "video/mp4");
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        context.startActivity(Intent.createChooser(intent, "Открыть видео"));
+    }
+
+    public static void shareVideo(Context context, Uri uri) {
+        Intent intent = new Intent(Intent.ACTION_SEND);
+        intent.setType("video/mp4");
+        intent.putExtra(Intent.EXTRA_STREAM, uri);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        context.startActivity(Intent.createChooser(intent, "Поделиться видео"));
+    }
 }

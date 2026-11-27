@@ -28,6 +28,7 @@ public class MainActivity extends AppCompatActivity {
     private Fragment trimFragment;
     private Fragment mergeFragment;
     private Fragment replaceFragment;
+    private Fragment videoFragment;
     private Fragment activeFragment;
 
     private TextView tvSaveFolderPath;
@@ -41,11 +42,6 @@ public class MainActivity extends AppCompatActivity {
                 if (uri != null) {
                     AudioUtils.setSaveFolderUri(this, uri);
                     updateSaveFolderBar();
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                requestNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS);
-            }
-        }
                     Toast.makeText(this, "Папка сохранения изменена", Toast.LENGTH_SHORT).show();
                 }
             });
@@ -76,6 +72,11 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(this, "Возвращена папка по умолчанию", Toast.LENGTH_SHORT).show();
         });
         updateSaveFolderBar();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                requestNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS);
+            }
+        }
 
         FragmentManager fm = getSupportFragmentManager();
         if (savedInstanceState == null) {
@@ -83,9 +84,11 @@ public class MainActivity extends AppCompatActivity {
             trimFragment = new TrimFragment();
             mergeFragment = new MergeFragment();
             replaceFragment = new ReplaceFragment();
+            videoFragment = new VideoFragment();
             activeFragment = convertFragment;
 
             fm.beginTransaction()
+                    .add(R.id.fragmentContainer, videoFragment, "video").hide(videoFragment)
                     .add(R.id.fragmentContainer, replaceFragment, "replace").hide(replaceFragment)
                     .add(R.id.fragmentContainer, mergeFragment, "merge").hide(mergeFragment)
                     .add(R.id.fragmentContainer, trimFragment, "trim").hide(trimFragment)
@@ -97,10 +100,12 @@ public class MainActivity extends AppCompatActivity {
             trimFragment = fm.findFragmentByTag("trim");
             mergeFragment = fm.findFragmentByTag("merge");
             replaceFragment = fm.findFragmentByTag("replace");
+            videoFragment = fm.findFragmentByTag("video");
             if (convertFragment == null) convertFragment = new ConvertFragment();
             if (trimFragment == null) trimFragment = new TrimFragment();
             if (mergeFragment == null) mergeFragment = new MergeFragment();
             if (replaceFragment == null) replaceFragment = new ReplaceFragment();
+            if (videoFragment == null) videoFragment = new VideoFragment();
 
             if (!trimFragment.isHidden()) {
                 activeFragment = trimFragment;
@@ -111,6 +116,9 @@ public class MainActivity extends AppCompatActivity {
             } else if (!replaceFragment.isHidden()) {
                 activeFragment = replaceFragment;
                 toolbar.setTitle("Замена фрагмента");
+            } else if (!videoFragment.isHidden()) {
+                activeFragment = videoFragment;
+                toolbar.setTitle("Видеоредактор MP4");
             } else {
                 activeFragment = convertFragment;
                 toolbar.setTitle("Изменение качества MP3");
@@ -130,6 +138,9 @@ public class MainActivity extends AppCompatActivity {
                 return true;
             } else if (id == R.id.nav_replace) {
                 switchFragment(replaceFragment, "Замена фрагмента");
+                return true;
+            } else if (id == R.id.nav_video) {
+                switchFragment(videoFragment, "Видеоредактор MP4");
                 return true;
             }
             return false;
