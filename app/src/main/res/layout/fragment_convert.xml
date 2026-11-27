@@ -93,6 +93,13 @@
                         android:text="64 кбит/с" />
 
                     <com.google.android.material.chip.Chip
+                        android:id="@+id/chip96"
+                        style="@style/Widget.Material3.Chip.Filter"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="96 кбит/с" />
+
+                    <com.google.android.material.chip.Chip
                         android:id="@+id/chip128"
                         style="@style/Widget.Material3.Chip.Filter"
                         android:layout_width="wrap_content"

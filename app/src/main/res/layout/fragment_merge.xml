@@ -110,6 +110,13 @@
                     app:singleSelection="true">
 
                     <com.google.android.material.chip.Chip
+                        android:id="@+id/chipMerge96"
+                        style="@style/Widget.Material3.Chip.Filter"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="96 кбит/с" />
+
+                    <com.google.android.material.chip.Chip
                         android:id="@+id/chipMerge128"
                         style="@style/Widget.Material3.Chip.Filter"
                         android:layout_width="wrap_content"
