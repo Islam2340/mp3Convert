@@ -4,4 +4,5 @@
     <string name="tab_convert">Качество</string>
     <string name="tab_trim">Обрезка</string>
     <string name="tab_merge">Соединить</string>
+    <string name="tab_replace">Замена</string>
 </resources>
