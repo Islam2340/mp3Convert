@@ -21,29 +21,46 @@ import com.google.android.material.card.MaterialCardView;
 import com.google.android.material.chip.ChipGroup;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
 import com.google.android.material.textfield.TextInputEditText;
+import com.google.android.material.textfield.TextInputLayout;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class ConvertFragment extends Fragment {
 
-    private AudioUtils.AudioInfo selectedAudio;
+    private final List<AudioUtils.AudioInfo> selectedAudios = new ArrayList<>();
     private int selectedBitrate = 128;
     private Uri lastSavedUri;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
-    private TextView tvFileInfo, tvBitrateHint, tvStatus, tvResultInfo;
+    private TextView tvFileInfo, tvBitrateHint, tvBatchNameHint, tvStatus, tvResultInfo;
+    private TextInputLayout tilOutputName;
     private TextInputEditText etOutputName;
-    private MaterialButton btnStartConvert;
-    private View layoutProgress;
+    private MaterialButton btnClear, btnStartConvert;
+    private View layoutProgress, layoutResultActions;
     private LinearProgressIndicator progressBar;
     private MaterialCardView cardResult;
 
     private final ActivityResultLauncher<String[]> pickAudioLauncher =
-            registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
-                if (uri != null && getContext() != null) {
-                    selectedAudio = AudioUtils.getAudioInfo(getContext(), uri);
+            registerForActivityResult(new ActivityResultContracts.OpenMultipleDocuments(), uris -> {
+                if (uris != null && !uris.isEmpty() && getContext() != null) {
+                    for (Uri uri : uris) {
+                        boolean exists = false;
+                        for (AudioUtils.AudioInfo existing : selectedAudios) {
+                            if (existing.uri.equals(uri)) {
+                                exists = true;
+                                break;
+                            }
+                        }
+                        if (!exists) {
+                            selectedAudios.add(AudioUtils.getAudioInfo(getContext(), uri));
+                        }
+                    }
                     updateFileUi();
                 }
             });
@@ -54,20 +71,28 @@ public class ConvertFragment extends Fragment {
         View view = inflater.inflate(R.layout.fragment_convert, container, false);
 
         MaterialButton btnPick = view.findViewById(R.id.btnPickConvertFile);
+        btnClear = view.findViewById(R.id.btnClearConvertFiles);
         tvFileInfo = view.findViewById(R.id.tvConvertFileInfo);
         ChipGroup chipGroup = view.findViewById(R.id.chipGroupConvertBitrate);
         tvBitrateHint = view.findViewById(R.id.tvBitrateHint);
+        tilOutputName = view.findViewById(R.id.tilConvertOutputName);
         etOutputName = view.findViewById(R.id.etConvertOutputName);
+        tvBatchNameHint = view.findViewById(R.id.tvBatchNameHint);
         btnStartConvert = view.findViewById(R.id.btnStartConvert);
         layoutProgress = view.findViewById(R.id.layoutConvertProgress);
         progressBar = view.findViewById(R.id.progressConvert);
         tvStatus = view.findViewById(R.id.tvConvertStatus);
         cardResult = view.findViewById(R.id.cardConvertResult);
         tvResultInfo = view.findViewById(R.id.tvConvertResultInfo);
+        layoutResultActions = view.findViewById(R.id.layoutConvertResultActions);
         MaterialButton btnOpen = view.findViewById(R.id.btnConvertOpen);
         MaterialButton btnShare = view.findViewById(R.id.btnConvertShare);
 
         btnPick.setOnClickListener(v -> pickAudioLauncher.launch(new String[]{"audio/mpeg", "audio/*"}));
+        btnClear.setOnClickListener(v -> {
+            selectedAudios.clear();
+            updateFileUi();
+        });
 
         chipGroup.setOnCheckedStateChangeListener((group, checkedIds) -> {
             if (checkedIds.isEmpty()) return;
@@ -91,9 +116,7 @@ public class ConvertFragment extends Fragment {
                 selectedBitrate = 320;
                 tvBitrateHint.setText("320 кбит/с — максимальное качество MP3");
             }
-            if (selectedAudio != null) {
-                etOutputName.setText(AudioUtils.stripExtension(selectedAudio.displayName) + "_" + selectedBitrate + "k");
-            }
+            updateOutputNameHints();
         });
 
         btnStartConvert.setOnClickListener(v -> startConversion());
@@ -112,118 +135,221 @@ public class ConvertFragment extends Fragment {
     }
 
     private void updateFileUi() {
-        if (selectedAudio == null) return;
-        String brText = selectedAudio.bitrateKbps > 0 ? (selectedAudio.bitrateKbps + " кбит/с") : "неизвестно";
-        tvFileInfo.setText(
-                selectedAudio.displayName + "\n" +
-                "Длительность: " + AudioUtils.formatTimeMs(selectedAudio.durationMs) +
-                "  •  Битрейт: " + brText +
-                "  •  Размер: " + AudioUtils.formatSize(selectedAudio.sizeBytes)
-        );
-        etOutputName.setText(AudioUtils.stripExtension(selectedAudio.displayName) + "_" + selectedBitrate + "k");
+        int count = selectedAudios.size();
+        if (count == 0) {
+            tvFileInfo.setText("Файлы не выбраны");
+            btnClear.setVisibility(View.GONE);
+            btnStartConvert.setEnabled(false);
+            btnStartConvert.setText("Конвертировать в MP3");
+            tilOutputName.setVisibility(View.VISIBLE);
+            tvBatchNameHint.setVisibility(View.GONE);
+            etOutputName.setText("");
+            cardResult.setVisibility(View.GONE);
+            return;
+        }
+
+        btnClear.setVisibility(View.VISIBLE);
         btnStartConvert.setEnabled(true);
         cardResult.setVisibility(View.GONE);
+
+        if (count == 1) {
+            AudioUtils.AudioInfo info = selectedAudios.get(0);
+            String brText = info.bitrateKbps > 0 ? (info.bitrateKbps + " кбит/с") : "неизвестно";
+            tvFileInfo.setText(
+                    info.displayName + "\n" +
+                    "Длительность: " + AudioUtils.formatTimeMs(info.durationMs) +
+                    "  •  Битрейт: " + brText +
+                    "  •  Размер: " + AudioUtils.formatSize(info.sizeBytes)
+            );
+            btnStartConvert.setText("Конвертировать в MP3");
+            tilOutputName.setVisibility(View.VISIBLE);
+            tvBatchNameHint.setVisibility(View.GONE);
+        } else {
+            long totalSize = 0;
+            StringBuilder sb = new StringBuilder();
+            for (AudioUtils.AudioInfo info : selectedAudios) {
+                totalSize += info.sizeBytes;
+            }
+            sb.append("Выбрано файлов: ").append(count)
+              .append("  •  Общий размер: ").append(AudioUtils.formatSize(totalSize));
+
+            int showLimit = Math.min(count, 6);
+            for (int i = 0; i < showLimit; i++) {
+                sb.append("\n").append(i + 1).append(". ").append(selectedAudios.get(i).displayName);
+            }
+            if (count > showLimit) {
+                sb.append("\n… и ещё ").append(count - showLimit);
+            }
+            tvFileInfo.setText(sb.toString());
+            btnStartConvert.setText("Конвертировать (" + count + " файлов)");
+            tilOutputName.setVisibility(View.GONE);
+            tvBatchNameHint.setVisibility(View.VISIBLE);
+        }
+
+        updateOutputNameHints();
+    }
+
+    private void updateOutputNameHints() {
+        if (selectedAudios.size() == 1) {
+            etOutputName.setText(AudioUtils.stripExtension(selectedAudios.get(0).displayName) + "_" + selectedBitrate + "k");
+        } else if (selectedAudios.size() > 1) {
+            tvBatchNameHint.setText("Имена файлов будут: исходное_имя_" + selectedBitrate + "k.mp3");
+        }
     }
 
     private void startConversion() {
-        if (selectedAudio == null || getContext() == null) return;
+        if (selectedAudios.isEmpty() || getContext() == null) return;
 
-        String outputName = etOutputName.getText() != null ? etOutputName.getText().toString().trim() : "";
-        if (outputName.isEmpty()) {
-            outputName = AudioUtils.stripExtension(selectedAudio.displayName) + "_" + selectedBitrate + "k";
-        }
-        final String finalOutputName = outputName;
+        final List<AudioUtils.AudioInfo> snapshot = new ArrayList<>(selectedAudios);
+        final int totalCount = snapshot.size();
+        final int targetBitrate = selectedBitrate;
+        final String singleCustomName = (totalCount == 1 && etOutputName.getText() != null)
+                ? etOutputName.getText().toString().trim()
+                : "";
 
         btnStartConvert.setEnabled(false);
+        btnClear.setEnabled(false);
         cardResult.setVisibility(View.GONE);
         layoutProgress.setVisibility(View.VISIBLE);
-        progressBar.setIndeterminate(true);
-        tvStatus.setText("Подготовка файла...");
+        progressBar.setIndeterminate(false);
+        progressBar.setProgress(0);
+        tvStatus.setText("Подготовка...");
 
         executor.execute(() -> {
-            File inputTemp = null;
-            File outputTemp = null;
-            try {
-                inputTemp = AudioUtils.copyUriToCache(requireContext(), selectedAudio.uri, "conv_in");
-                outputTemp = new File(requireContext().getCacheDir(), "conv_out_" + System.currentTimeMillis() + ".mp3");
+            int successCount = 0;
+            int failCount = 0;
+            long totalOrigSize = 0;
+            long totalNewSize = 0;
+            AudioUtils.SaveResult lastResult = null;
 
-                String[] args = new String[]{
-                        "-y",
-                        "-i", inputTemp.getAbsolutePath(),
-                        "-vn",
-                        "-c:a", "libmp3lame",
-                        "-b:a", selectedBitrate + "k",
-                        "-map_metadata", "0",
-                        outputTemp.getAbsolutePath()
-                };
+            for (int i = 0; i < totalCount; i++) {
+                AudioUtils.AudioInfo audio = snapshot.get(i);
+                totalOrigSize += audio.sizeBytes;
+                final int fileIndex = i;
 
-                final File finalInput = inputTemp;
-                final File finalOutput = outputTemp;
+                String outName;
+                if (totalCount == 1 && !singleCustomName.isEmpty()) {
+                    outName = singleCustomName;
+                } else {
+                    outName = AudioUtils.stripExtension(audio.displayName) + "_" + targetBitrate + "k";
+                }
 
-                requireActivity().runOnUiThread(() -> {
-                    progressBar.setIndeterminate(false);
-                    progressBar.setProgress(0);
-                    tvStatus.setText("Конвертация: 0%");
-                });
+                runUi(() -> tvStatus.setText(
+                        totalCount == 1
+                                ? "Подготовка файла..."
+                                : "Файл " + (fileIndex + 1) + " из " + totalCount + ": " + audio.displayName
+                ));
 
-                FFmpegKit.executeWithArgumentsAsync(args,
-                        session -> {
-                            if (ReturnCode.isSuccess(session.getReturnCode())) {
-                                try {
-                                    long newSize = finalOutput.length();
-                                    AudioUtils.SaveResult res = AudioUtils.saveMp3Output(requireContext(), finalOutput, finalOutputName);
-                                    lastSavedUri = res.uri;
-                                    requireActivity().runOnUiThread(() -> {
-                                        layoutProgress.setVisibility(View.GONE);
-                                        btnStartConvert.setEnabled(true);
-                                        cardResult.setVisibility(View.VISIBLE);
-                                        tvResultInfo.setText(
-                                                "Готово! Сохранено в " + res.displayPath + "\n" +
-                                                "Размер: " + AudioUtils.formatSize(selectedAudio.sizeBytes) +
-                                                " → " + AudioUtils.formatSize(newSize) +
-                                                " (" + selectedBitrate + " кбит/с)"
-                                        );
+                File inputTemp = null;
+                File outputTemp = null;
+                try {
+                    inputTemp = AudioUtils.copyUriToCache(requireContext(), audio.uri, "conv_in_" + i);
+                    outputTemp = new File(requireContext().getCacheDir(), "conv_out_" + i + "_" + System.currentTimeMillis() + ".mp3");
+
+                    String[] args = new String[]{
+                            "-y",
+                            "-i", inputTemp.getAbsolutePath(),
+                            "-vn",
+                            "-c:a", "libmp3lame",
+                            "-b:a", targetBitrate + "k",
+                            "-map_metadata", "0",
+                            outputTemp.getAbsolutePath()
+                    };
+
+                    CountDownLatch latch = new CountDownLatch(1);
+                    AtomicBoolean ok = new AtomicBoolean(false);
+
+                    FFmpegKit.executeWithArgumentsAsync(args,
+                            session -> {
+                                ok.set(ReturnCode.isSuccess(session.getReturnCode()));
+                                latch.countDown();
+                            },
+                            log -> {},
+                            statistics -> {
+                                if (audio.durationMs > 0) {
+                                    double fileFrac = Math.min(0.99, statistics.getTime() / audio.durationMs);
+                                    int filePct = (int) Math.round(fileFrac * 100.0);
+                                    int overallPct = (int) Math.min(99, Math.round(((fileIndex + fileFrac) / totalCount) * 100.0));
+                                    runUi(() -> {
+                                        progressBar.setProgress(overallPct);
+                                        if (totalCount == 1) {
+                                            tvStatus.setText("Конвертация: " + filePct + "%");
+                                        } else {
+                                            tvStatus.setText("Файл " + (fileIndex + 1) + " из " + totalCount + ": " + filePct + "%");
+                                        }
                                     });
-                                } catch (Exception e) {
-                                    showError("Ошибка сохранения: " + e.getMessage());
-                                }
-                            } else {
-                                showError("Ошибка FFmpeg при конвертации");
-                            }
-                            //noinspection ResultOfMethodCallIgnored
-                            finalInput.delete();
-                            //noinspection ResultOfMethodCallIgnored
-                            finalOutput.delete();
-                        },
-                        log -> {},
-                        statistics -> {
-                            if (selectedAudio.durationMs > 0) {
-                                int pct = (int) Math.min(99, Math.round((statistics.getTime() / selectedAudio.durationMs) * 100.0));
-                                if (isAdded()) {
-                                    requireActivity().runOnUiThread(() -> {
-                                        progressBar.setProgress(pct);
-                                        tvStatus.setText("Конвертация: " + pct + "%");
-                                    });
                                 }
                             }
-                        }
-                );
-            } catch (Exception e) {
-                if (inputTemp != null) //noinspection ResultOfMethodCallIgnored
-                    inputTemp.delete();
-                if (outputTemp != null) //noinspection ResultOfMethodCallIgnored
-                    outputTemp.delete();
-                showError("Ошибка чтения файла: " + e.getMessage());
+                    );
+
+                    latch.await();
+
+                    if (ok.get() && outputTemp.exists() && outputTemp.length() > 0) {
+                        totalNewSize += outputTemp.length();
+                        lastResult = AudioUtils.saveMp3Output(requireContext(), outputTemp, outName);
+                        successCount++;
+                    } else {
+                        failCount++;
+                    }
+                } catch (Exception e) {
+                    failCount++;
+                } finally {
+                    if (inputTemp != null) //noinspection ResultOfMethodCallIgnored
+                        inputTemp.delete();
+                    if (outputTemp != null) //noinspection ResultOfMethodCallIgnored
+                        outputTemp.delete();
+                }
+
+                final int donePct = (int) Math.round(((i + 1.0) / totalCount) * 100.0);
+                runUi(() -> progressBar.setProgress(donePct));
             }
+
+            final int finalSuccess = successCount;
+            final int finalFail = failCount;
+            final long finalOrigSize = totalOrigSize;
+            final long finalNewSize = totalNewSize;
+            final AudioUtils.SaveResult finalLastRes = lastResult;
+
+            runUi(() -> {
+                layoutProgress.setVisibility(View.GONE);
+                btnStartConvert.setEnabled(!selectedAudios.isEmpty());
+                btnClear.setEnabled(true);
+
+                if (finalSuccess == 0) {
+                    Toast.makeText(getContext(), "Не удалось конвертировать файлы", Toast.LENGTH_LONG).show();
+                    return;
+                }
+
+                cardResult.setVisibility(View.VISIBLE);
+                if (totalCount == 1 && finalLastRes != null) {
+                    lastSavedUri = finalLastRes.uri;
+                    layoutResultActions.setVisibility(View.VISIBLE);
+                    tvResultInfo.setText(
+                            "Готово! Сохранено в " + finalLastRes.displayPath + "\n" +
+                            "Размер: " + AudioUtils.formatSize(finalOrigSize) +
+                            " → " + AudioUtils.formatSize(finalNewSize) +
+                            " (" + targetBitrate + " кбит/с)"
+                    );
+                } else {
+                    lastSavedUri = finalLastRes != null ? finalLastRes.uri : null;
+                    layoutResultActions.setVisibility(View.GONE);
+                    String folderName = AudioUtils.getSaveFolderDisplayName(requireContext());
+                    String failNote = finalFail > 0 ? (" (ошибок: " + finalFail + ")") : "";
+                    tvResultInfo.setText(
+                            "Готово! Конвертировано: " + finalSuccess + " из " + totalCount + failNote + "\n" +
+                            "Папка: " + folderName + "\n" +
+                            "Общий размер: " + AudioUtils.formatSize(finalOrigSize) +
+                            " → " + AudioUtils.formatSize(finalNewSize) +
+                            " (" + targetBitrate + " кбит/с)"
+                    );
+                }
+            });
         });
     }
 
-    private void showError(String msg) {
-        if (!isAdded()) return;
-        requireActivity().runOnUiThread(() -> {
-            layoutProgress.setVisibility(View.GONE);
-            btnStartConvert.setEnabled(true);
-            Toast.makeText(getContext(), msg, Toast.LENGTH_LONG).show();
-        });
+    private void runUi(Runnable r) {
+        if (isAdded() && getActivity() != null) {
+            getActivity().runOnUiThread(r);
+        }
     }
 }
