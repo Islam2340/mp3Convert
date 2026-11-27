@@ -84,6 +84,8 @@ public class MainActivity extends AppCompatActivity {
             return insets;
         });
 
+        findViewById(R.id.btnCheckUpdate).setOnClickListener(v -> UpdateManager.checkForUpdate(this));
+
         ImageButton btnToggleTheme = findViewById(R.id.btnToggleTheme);
         btnToggleTheme.setImageResource(isDark ? R.drawable.ic_theme_light : R.drawable.ic_theme_dark);
         btnToggleTheme.setOnClickListener(v -> {
@@ -115,16 +117,17 @@ public class MainActivity extends AppCompatActivity {
             mergeFragment = new MergeFragment();
             replaceFragment = new ReplaceFragment();
             videoFragment = new VideoFragment();
-            activeFragment = convertFragment;
+            activeFragment = videoFragment;
 
             fm.beginTransaction()
-                    .add(R.id.fragmentContainer, videoFragment, "video").hide(videoFragment)
-                    .add(R.id.fragmentContainer, replaceFragment, "replace").hide(replaceFragment)
+                    .add(R.id.fragmentContainer, convertFragment, "convert").hide(convertFragment)
                     .add(R.id.fragmentContainer, mergeFragment, "merge").hide(mergeFragment)
                     .add(R.id.fragmentContainer, trimFragment, "trim").hide(trimFragment)
-                    .add(R.id.fragmentContainer, convertFragment, "convert")
+                    .add(R.id.fragmentContainer, replaceFragment, "replace").hide(replaceFragment)
+                    .add(R.id.fragmentContainer, videoFragment, "video")
                     .commit();
-            tvHeaderTitle.setText("Конвертация");
+            tvHeaderTitle.setText("Видео MP4");
+            bottomNav.setSelectedItemId(R.id.nav_video);
         } else {
             convertFragment = fm.findFragmentByTag("convert");
             trimFragment = fm.findFragmentByTag("trim");

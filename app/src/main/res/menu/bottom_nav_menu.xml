@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <menu xmlns:android="http://schemas.android.com/apk/res/android">
     <item
-        android:id="@+id/nav_convert"
-        android:icon="@drawable/ic_tune"
-        android:title="@string/tab_convert" />
+        android:id="@+id/nav_video"
+        android:icon="@drawable/ic_video"
+        android:title="@string/tab_video" />
+    <item
+        android:id="@+id/nav_replace"
+        android:icon="@drawable/ic_replace"
+        android:title="@string/tab_replace" />
     <item
         android:id="@+id/nav_trim"
         android:icon="@drawable/ic_cut"
@@ -13,11 +17,7 @@
         android:icon="@drawable/ic_merge"
         android:title="@string/tab_merge" />
     <item
-        android:id="@+id/nav_replace"
-        android:icon="@drawable/ic_replace"
-        android:title="@string/tab_replace" />
-    <item
-        android:id="@+id/nav_video"
-        android:icon="@drawable/ic_video"
-        android:title="@string/tab_video" />
+        android:id="@+id/nav_convert"
+        android:icon="@drawable/ic_tune"
+        android:title="@string/tab_convert" />
 </menu>

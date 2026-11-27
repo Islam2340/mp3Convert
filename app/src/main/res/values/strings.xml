@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">MP3/MP4 Мастер</string>
-    <string name="tab_convert">Качество</string>
+    <string name="tab_video">Видео</string>
+    <string name="tab_replace">Замена</string>
     <string name="tab_trim">Обрезка</string>
     <string name="tab_merge">Соединить</string>
-    <string name="tab_replace">Замена</string>
-    <string name="tab_video">Видео</string>
+    <string name="tab_convert">Конверт.</string>
 </resources>

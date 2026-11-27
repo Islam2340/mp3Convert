@@ -602,6 +602,17 @@
                                 android:text="Конец здесь"
                                 android:textSize="12sp" />
                         </LinearLayout>
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnSplitClipHere"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="match_parent"
+                            android:layout_height="38dp"
+                            android:layout_marginTop="8dp"
+                            android:insetTop="0dp"
+                            android:insetBottom="0dp"
+                            android:text="Разделить здесь (чтобы вырезать середину)"
+                            android:textSize="12sp" />
                     </LinearLayout>
 
                     <!-- Panel 2: Rotate & Flip active clip -->
@@ -837,7 +848,67 @@
                                 android:layout_width="wrap_content"
                                 android:layout_height="wrap_content"
                                 android:text="Свой MP3" />
+
+                            <com.google.android.material.chip.Chip
+                                android:id="@+id/chipVidAudioMix"
+                                style="@style/Widget.Material3.Chip.Filter"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Микс (родной + MP3)" />
                         </com.google.android.material.chip.ChipGroup>
+
+                        <!-- Original Video Volume Slider -->
+                        <LinearLayout
+                            android:id="@+id/layoutOrigVolBox"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:id="@+id/tvOrigVolLabel"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Громкость видео: 100%"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="12sp" />
+
+                            <com.google.android.material.slider.Slider
+                                android:id="@+id/sliderOrigVolume"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:stepSize="5"
+                                android:value="100"
+                                android:valueFrom="0"
+                                android:valueTo="100" />
+                        </LinearLayout>
+
+                        <!-- Custom MP3 Volume Slider -->
+                        <LinearLayout
+                            android:id="@+id/layoutCustomVolBox"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:orientation="vertical"
+                            android:visibility="gone">
+
+                            <TextView
+                                android:id="@+id/tvCustomVolLabel"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Громкость своего MP3: 100%"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="12sp" />
+
+                            <com.google.android.material.slider.Slider
+                                android:id="@+id/sliderCustomVolume"
+                                android:layout_width="match_parent"
+                                android:layout_height="wrap_content"
+                                android:stepSize="5"
+                                android:value="100"
+                                android:valueFrom="0"
+                                android:valueTo="100" />
+                        </LinearLayout>
 
                         <LinearLayout
                             android:id="@+id/layoutCustomMp3Box"

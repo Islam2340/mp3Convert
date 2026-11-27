@@ -49,6 +49,24 @@ public class AudioUtils {
             return durationMs > 0 && (trimStartMs > 100 || (trimEndMs > 0 && trimEndMs < durationMs - 100));
         }
 
+        public VideoInfo copy() {
+            VideoInfo c = new VideoInfo();
+            c.uri = this.uri;
+            c.displayName = this.displayName;
+            c.durationMs = this.durationMs;
+            c.sizeBytes = this.sizeBytes;
+            c.width = this.width;
+            c.height = this.height;
+            c.rotation = this.rotation;
+            c.hasAudio = this.hasAudio;
+            c.trimStartMs = this.trimStartMs;
+            c.trimEndMs = this.trimEndMs;
+            c.extraRotateDeg = this.extraRotateDeg;
+            c.flipH = this.flipH;
+            c.flipV = this.flipV;
+            return c;
+        }
+
         public long getEffectiveDurationMs() {
             long end = (trimEndMs > 0 && trimEndMs <= durationMs) ? trimEndMs : durationMs;
             long start = Math.max(0, Math.min(trimStartMs, end));

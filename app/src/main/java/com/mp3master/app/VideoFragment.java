@@ -38,6 +38,7 @@ import com.google.android.material.card.MaterialCardView;
 import com.google.android.material.chip.ChipGroup;
 import com.google.android.material.materialswitch.MaterialSwitch;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
+import com.google.android.material.slider.Slider;
 import com.google.android.material.textfield.TextInputEditText;
 
 import java.io.File;
@@ -64,17 +65,23 @@ public class VideoFragment extends Fragment {
     private static final int AUDIO_ORIG = 0;
     private static final int AUDIO_MUTE = 1;
     private static final int AUDIO_CUSTOM = 2;
+    private static final int AUDIO_MIX = 3;
 
-    private final List<AudioUtils.VideoInfo> clips = new ArrayList<>();
+    // Retained across theme switches (Activity recreation)
+    private static final List<AudioUtils.VideoInfo> clips = new ArrayList<>();
+    private static int activeClipIndex = 0;
+    private static Uri customAudioUri;
+    private static String customAudioName;
+    private static int aspectMode = ASPECT_ORIG;
+    private static int fillMode = FILL_BLUR;
+    private static int audioMode = AUDIO_ORIG;
+    private static int origVolumePct = 100;
+    private static int customVolumePct = 100;
+    private static double speedFactor = 1.0;
+    private static int targetRes = 0; // 0=orig, 1080, 720, 480
+    private static String savedOutputName = "";
+
     private VideoClipAdapter clipAdapter;
-    private int activeClipIndex = 0;
-
-    private Uri customAudioUri;
-    private int aspectMode = ASPECT_ORIG;
-    private int fillMode = FILL_BLUR;
-    private int audioMode = AUDIO_ORIG;
-    private double speedFactor = 1.0;
-    private int targetRes = 0; // 0=orig, 1080, 720, 480
 
     // Frame-accurate MediaPlayer + TextureView
     private MediaPlayer mediaPlayer;
@@ -98,7 +105,9 @@ public class VideoFragment extends Fragment {
 
     // Views
     private MaterialCardView cardEmpty, cardResult;
-    private View layoutWorkspace, layoutFillMode, layoutCustomMp3Box, layoutProgress;
+    private View layoutWorkspace, layoutFillMode, layoutCustomMp3Box, layoutOrigVolBox, layoutCustomVolBox, layoutProgress;
+    private TextView tvOrigVolLabel, tvCustomVolLabel;
+    private Slider sliderOrigVolume, sliderCustomVolume;
     private View panelTrim, panelRotate, panelFormat, panelAudio, panelSpeed, panelQuality;
     private ImageView iconToolTrim, iconToolRotate, iconToolFormat, iconToolAudio, iconToolSpeed, iconToolQuality;
     private TextureView texturePreview;
@@ -163,7 +172,8 @@ public class VideoFragment extends Fragment {
             registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
                 if (uri != null && getContext() != null) {
                     customAudioUri = uri;
-                    tvCustomAudioName.setText("Выбран: " + AudioUtils.getFileName(getContext(), uri));
+                    customAudioName = AudioUtils.getFileName(getContext(), uri);
+                    tvCustomAudioName.setText("Выбран: " + customAudioName);
                 }
             });
 
@@ -204,6 +214,12 @@ public class VideoFragment extends Fragment {
         switchFlipV = view.findViewById(R.id.switchFlipV);
         layoutFillMode = view.findViewById(R.id.layoutVideoFillMode);
         layoutCustomMp3Box = view.findViewById(R.id.layoutCustomMp3Box);
+        layoutOrigVolBox = view.findViewById(R.id.layoutOrigVolBox);
+        layoutCustomVolBox = view.findViewById(R.id.layoutCustomVolBox);
+        tvOrigVolLabel = view.findViewById(R.id.tvOrigVolLabel);
+        tvCustomVolLabel = view.findViewById(R.id.tvCustomVolLabel);
+        sliderOrigVolume = view.findViewById(R.id.sliderOrigVolume);
+        sliderCustomVolume = view.findViewById(R.id.sliderCustomVolume);
         tvCustomAudioName = view.findViewById(R.id.tvVideoCustomAudioName);
         etOutputName = view.findViewById(R.id.etVideoOutputName);
 
@@ -286,6 +302,8 @@ public class VideoFragment extends Fragment {
                 updateTotalDurationHeader();
             }
         });
+
+        view.findViewById(R.id.btnSplitClipHere).setOnClickListener(v -> splitActiveClipAtPlayhead());
 
         // Clip order / delete
         view.findViewById(R.id.btnClipMoveLeft).setOnClickListener(v -> {
@@ -372,7 +390,7 @@ public class VideoFragment extends Fragment {
             else if (id == R.id.chipFillPad) fillMode = FILL_PAD;
         });
 
-        // Audio
+        // Audio + Volume sliders
         ChipGroup audioGroup = view.findViewById(R.id.chipGroupVideoAudio);
         audioGroup.setOnCheckedStateChangeListener((g, ids) -> {
             if (ids.isEmpty()) return;
@@ -380,7 +398,20 @@ public class VideoFragment extends Fragment {
             if (id == R.id.chipVidAudioOrig) audioMode = AUDIO_ORIG;
             else if (id == R.id.chipVidAudioMute) audioMode = AUDIO_MUTE;
             else if (id == R.id.chipVidAudioCustom) audioMode = AUDIO_CUSTOM;
-            layoutCustomMp3Box.setVisibility(audioMode == AUDIO_CUSTOM ? View.VISIBLE : View.GONE);
+            else if (id == R.id.chipVidAudioMix) audioMode = AUDIO_MIX;
+            updateAudioControlsUi();
+        });
+        sliderOrigVolume.addOnChangeListener((slider, value, fromUser) -> {
+            origVolumePct = Math.round(value);
+            tvOrigVolLabel.setText("Громкость видео: " + origVolumePct + "%");
+            if (mediaPlayer != null && isPlayerPrepared) {
+                float v = (audioMode == AUDIO_MUTE || audioMode == AUDIO_CUSTOM) ? 0f : (origVolumePct / 100f);
+                try { mediaPlayer.setVolume(v, v); } catch (Exception ignored) {}
+            }
+        });
+        sliderCustomVolume.addOnChangeListener((slider, value, fromUser) -> {
+            customVolumePct = Math.round(value);
+            tvCustomVolLabel.setText("Громкость своего MP3: " + customVolumePct + "%");
         });
         view.findViewById(R.id.btnPickVideoCustomAudio).setOnClickListener(v ->
                 pickCustomAudioLauncher.launch(new String[]{"audio/mpeg", "audio/*"}));
@@ -420,7 +451,61 @@ public class VideoFragment extends Fragment {
             }
         });
 
+        // Restore retained state after theme switch
+        sliderOrigVolume.setValue(origVolumePct);
+        tvOrigVolLabel.setText("Громкость видео: " + origVolumePct + "%");
+        sliderCustomVolume.setValue(customVolumePct);
+        tvCustomVolLabel.setText("Громкость своего MP3: " + customVolumePct + "%");
+        if (customAudioName != null) {
+            tvCustomAudioName.setText("Выбран: " + customAudioName);
+        }
+        if (audioMode == AUDIO_MUTE) audioGroup.check(R.id.chipVidAudioMute);
+        else if (audioMode == AUDIO_CUSTOM) audioGroup.check(R.id.chipVidAudioCustom);
+        else if (audioMode == AUDIO_MIX) audioGroup.check(R.id.chipVidAudioMix);
+        else audioGroup.check(R.id.chipVidAudioOrig);
+        updateAudioControlsUi();
+
+        if (!savedOutputName.isEmpty()) {
+            etOutputName.setText(savedOutputName);
+        }
+        if (!clips.isEmpty()) {
+            if (activeClipIndex >= clips.size()) activeClipIndex = 0;
+            refreshWorkspace();
+        }
+
         return view;
+    }
+
+    private void updateAudioControlsUi() {
+        boolean needCustom = (audioMode == AUDIO_CUSTOM || audioMode == AUDIO_MIX);
+        boolean needOrig = (audioMode == AUDIO_ORIG || audioMode == AUDIO_MIX);
+        layoutCustomMp3Box.setVisibility(needCustom ? View.VISIBLE : View.GONE);
+        layoutOrigVolBox.setVisibility(needOrig ? View.VISIBLE : View.GONE);
+        layoutCustomVolBox.setVisibility(needCustom ? View.VISIBLE : View.GONE);
+        if (mediaPlayer != null && isPlayerPrepared) {
+            float v = needOrig ? (origVolumePct / 100f) : 0f;
+            try { mediaPlayer.setVolume(v, v); } catch (Exception ignored) {}
+        }
+    }
+
+    private void splitActiveClipAtPlayhead() {
+        AudioUtils.VideoInfo clip = getActiveClip();
+        if (clip == null) return;
+        pauseVideoPreview();
+        long pos = videoFilmstrip.getPlayheadMs();
+        if (pos <= clip.trimStartMs + 300L || pos >= clip.trimEndMs - 300L) {
+            Toast.makeText(getContext(), "Переместите белый курсор внутрь клипа для разделения", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        AudioUtils.VideoInfo rightPart = clip.copy();
+        rightPart.trimStartMs = pos;
+        rightPart.trimEndMs = clip.trimEndMs;
+        clip.trimEndMs = pos;
+
+        clips.add(activeClipIndex + 1, rightPart);
+        activeClipIndex = activeClipIndex + 1;
+        refreshWorkspace();
+        Toast.makeText(getContext(), "Клип разделён! Удалите ненужный кусок кнопкой «Удалить клип»", Toast.LENGTH_SHORT).show();
     }
 
     private void setupTextureView() {
@@ -898,7 +983,7 @@ public class VideoFragment extends Fragment {
         if (clips.isEmpty() || getContext() == null) return;
         pauseVideoPreview();
 
-        if (audioMode == AUDIO_CUSTOM && customAudioUri == null) {
+        if ((audioMode == AUDIO_CUSTOM || audioMode == AUDIO_MIX) && customAudioUri == null) {
             Toast.makeText(getContext(), "Выберите MP3 во вкладке «Звук»", Toast.LENGTH_SHORT).show();
             selectTool(3);
             return;
@@ -912,6 +997,8 @@ public class VideoFragment extends Fragment {
         final int fAspect = aspectMode;
         final int fFill = fillMode;
         final int fAudio = audioMode;
+        final float fOrigVol = origVolumePct / 100f;
+        final float fCustomVol = customVolumePct / 100f;
         final double fSpeed = speedFactor;
         final int fRes = targetRes;
         final Uri fCustomAudio = customAudioUri;
@@ -924,7 +1011,7 @@ public class VideoFragment extends Fragment {
             if (c.hasAudio) anyHasAudio = true;
         }
         final long expectedOutMs = Math.round(totalRawMs / fSpeed);
-        final boolean includeOrigAudio = (fAudio == AUDIO_ORIG && anyHasAudio);
+        final boolean includeOrigAudio = ((fAudio == AUDIO_ORIG || fAudio == AUDIO_MIX) && anyHasAudio);
 
         boolean singleFastCopy = (snapshot.size() == 1
                 && snapshot.get(0).extraRotateDeg == 0
@@ -932,6 +1019,7 @@ public class VideoFragment extends Fragment {
                 && !snapshot.get(0).flipV
                 && fAspect == ASPECT_ORIG
                 && fAudio == AUDIO_ORIG
+                && origVolumePct == 100
                 && Math.abs(fSpeed - 1.0) < 0.01
                 && fRes == 0
                 && !snapshot.get(0).isTrimmed());
@@ -952,7 +1040,7 @@ public class VideoFragment extends Fragment {
                     }
                     tempVids.add(AudioUtils.copyUriToCacheWithExt(appCtx, snapshot.get(i).uri, "vclip_" + i, ".mp4"));
                 }
-                if (fAudio == AUDIO_CUSTOM && fCustomAudio != null) {
+                if ((fAudio == AUDIO_CUSTOM || fAudio == AUDIO_MIX) && fCustomAudio != null) {
                     inAud = AudioUtils.copyUriToCacheWithExt(appCtx, fCustomAudio, "vaud", ".mp3");
                 }
                 outVid = new File(appCtx.getCacheDir(), "vout_" + System.currentTimeMillis() + ".mp4");
@@ -979,7 +1067,7 @@ public class VideoFragment extends Fragment {
                         args.add(tempVids.get(i).getAbsolutePath());
                     }
                     int customAudioInputIdx = -1;
-                    if (fAudio == AUDIO_CUSTOM && inAud != null) {
+                    if ((fAudio == AUDIO_CUSTOM || fAudio == AUDIO_MIX) && inAud != null) {
                         customAudioInputIdx = snapshot.size();
                         args.add("-i");
                         args.add(inAud.getAbsolutePath());
@@ -1057,26 +1145,37 @@ public class VideoFragment extends Fragment {
                         }
                     }
 
+                    String finalAudioLabel = null;
+                    if (fAudio == AUDIO_MIX && customAudioInputIdx >= 0 && includeOrigAudio) {
+                        fc.append(";[aout]volume=").append(String.format(Locale.US, "%.2f", fOrigVol)).append("[aorig_v];")
+                          .append("[").append(customAudioInputIdx).append(":a:0]volume=").append(String.format(Locale.US, "%.2f", fCustomVol))
+                          .append(",aformat=sample_rates=44100:channel_layouts=stereo[acust_v];")
+                          .append("[aorig_v][acust_v]amix=inputs=2:duration=first:dropout_transition=2[afinal]");
+                        finalAudioLabel = "[afinal]";
+                    } else if (customAudioInputIdx >= 0) {
+                        fc.append(";[").append(customAudioInputIdx).append(":a:0]volume=").append(String.format(Locale.US, "%.2f", fCustomVol))
+                          .append("[afinal]");
+                        finalAudioLabel = "[afinal]";
+                    } else if (includeOrigAudio) {
+                        fc.append(";[aout]volume=").append(String.format(Locale.US, "%.2f", fOrigVol)).append("[afinal]");
+                        finalAudioLabel = "[afinal]";
+                    }
+
                     args.add("-filter_complex");
                     args.add(fc.toString());
                     args.add("-map");
                     args.add("[vout]");
 
-                    if (customAudioInputIdx >= 0) {
+                    if (finalAudioLabel != null) {
                         args.add("-map");
-                        args.add(customAudioInputIdx + ":a:0");
+                        args.add(finalAudioLabel);
                         args.add("-c:a");
                         args.add("aac");
                         args.add("-b:a");
                         args.add("128k");
-                        args.add("-shortest");
-                    } else if (includeOrigAudio) {
-                        args.add("-map");
-                        args.add("[aout]");
-                        args.add("-c:a");
-                        args.add("aac");
-                        args.add("-b:a");
-                        args.add("128k");
+                        if (customAudioInputIdx >= 0 && fAudio == AUDIO_CUSTOM) {
+                            args.add("-shortest");
+                        }
                     } else {
                         args.add("-an");
                     }
@@ -1227,6 +1326,7 @@ public class VideoFragment extends Fragment {
 
     @Override
     public void onDestroyView() {
+        if (etOutputName != null && etOutputName.getText() != null) savedOutputName = etOutputName.getText().toString();
         releasePlayer();
         super.onDestroyView();
     }
