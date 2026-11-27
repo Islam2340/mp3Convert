@@ -1,5 +1,6 @@
 package com.mp3master.app;
 
+import android.content.Context;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.LayoutInflater;
@@ -37,11 +38,13 @@ public class ConvertFragment extends Fragment {
     private int selectedBitrate = 128;
     private Uri lastSavedUri;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final AtomicBoolean isCancelled = new AtomicBoolean(false);
+    private volatile long activeSessionId = -1;
 
     private TextView tvFileInfo, tvBitrateHint, tvBatchNameHint, tvStatus, tvResultInfo;
     private TextInputLayout tilOutputName;
     private TextInputEditText etOutputName;
-    private MaterialButton btnClear, btnStartConvert;
+    private MaterialButton btnClear, btnStartConvert, btnCancelConvert;
     private View layoutProgress, layoutResultActions;
     private LinearProgressIndicator progressBar;
     private MaterialCardView cardResult;
@@ -79,6 +82,7 @@ public class ConvertFragment extends Fragment {
         etOutputName = view.findViewById(R.id.etConvertOutputName);
         tvBatchNameHint = view.findViewById(R.id.tvBatchNameHint);
         btnStartConvert = view.findViewById(R.id.btnStartConvert);
+        btnCancelConvert = view.findViewById(R.id.btnCancelConvert);
         layoutProgress = view.findViewById(R.id.layoutConvertProgress);
         progressBar = view.findViewById(R.id.progressConvert);
         tvStatus = view.findViewById(R.id.tvConvertStatus);
@@ -120,6 +124,17 @@ public class ConvertFragment extends Fragment {
         });
 
         btnStartConvert.setOnClickListener(v -> startConversion());
+        btnCancelConvert.setOnClickListener(v -> {
+            isCancelled.set(true);
+            btnCancelConvert.setEnabled(false);
+            tvStatus.setText("Отмена...");
+            if (activeSessionId > 0) {
+                FFmpegKit.cancel(activeSessionId);
+            } else {
+                FFmpegKit.cancel();
+            }
+        });
+
         btnOpen.setOnClickListener(v -> {
             if (lastSavedUri != null && getContext() != null) {
                 AudioUtils.openAudio(getContext(), lastSavedUri);
@@ -200,6 +215,7 @@ public class ConvertFragment extends Fragment {
     private void startConversion() {
         if (selectedAudios.isEmpty() || getContext() == null) return;
 
+        final Context appCtx = requireContext().getApplicationContext();
         final List<AudioUtils.AudioInfo> snapshot = new ArrayList<>(selectedAudios);
         final int totalCount = snapshot.size();
         final int targetBitrate = selectedBitrate;
@@ -207,13 +223,19 @@ public class ConvertFragment extends Fragment {
                 ? etOutputName.getText().toString().trim()
                 : "";
 
+        isCancelled.set(false);
+        activeSessionId = -1;
         btnStartConvert.setEnabled(false);
         btnClear.setEnabled(false);
+        btnCancelConvert.setEnabled(true);
         cardResult.setVisibility(View.GONE);
         layoutProgress.setVisibility(View.VISIBLE);
         progressBar.setIndeterminate(false);
         progressBar.setProgress(0);
         tvStatus.setText("Подготовка...");
+
+        final String notifTitle = totalCount == 1 ? "Конвертация MP3" : ("Конвертация (" + totalCount + " файлов)");
+        AudioProcessingService.startTask(appCtx, notifTitle, "Подготовка...");
 
         executor.execute(() -> {
             int successCount = 0;
@@ -222,88 +244,105 @@ public class ConvertFragment extends Fragment {
             long totalNewSize = 0;
             AudioUtils.SaveResult lastResult = null;
 
-            for (int i = 0; i < totalCount; i++) {
-                AudioUtils.AudioInfo audio = snapshot.get(i);
-                totalOrigSize += audio.sizeBytes;
-                final int fileIndex = i;
+            try {
+                for (int i = 0; i < totalCount; i++) {
+                    if (isCancelled.get()) break;
 
-                String outName;
-                if (totalCount == 1 && !singleCustomName.isEmpty()) {
-                    outName = singleCustomName;
-                } else {
-                    outName = AudioUtils.stripExtension(audio.displayName) + "_" + targetBitrate + "k";
-                }
+                    AudioUtils.AudioInfo audio = snapshot.get(i);
+                    totalOrigSize += audio.sizeBytes;
+                    final int fileIndex = i;
 
-                runUi(() -> tvStatus.setText(
-                        totalCount == 1
-                                ? "Подготовка файла..."
-                                : "Файл " + (fileIndex + 1) + " из " + totalCount + ": " + audio.displayName
-                ));
-
-                File inputTemp = null;
-                File outputTemp = null;
-                try {
-                    inputTemp = AudioUtils.copyUriToCache(requireContext(), audio.uri, "conv_in_" + i);
-                    outputTemp = new File(requireContext().getCacheDir(), "conv_out_" + i + "_" + System.currentTimeMillis() + ".mp3");
-
-                    String[] args = new String[]{
-                            "-y",
-                            "-i", inputTemp.getAbsolutePath(),
-                            "-vn",
-                            "-c:a", "libmp3lame",
-                            "-b:a", targetBitrate + "k",
-                            "-map_metadata", "0",
-                            outputTemp.getAbsolutePath()
-                    };
-
-                    CountDownLatch latch = new CountDownLatch(1);
-                    AtomicBoolean ok = new AtomicBoolean(false);
-
-                    FFmpegKit.executeWithArgumentsAsync(args,
-                            session -> {
-                                ok.set(ReturnCode.isSuccess(session.getReturnCode()));
-                                latch.countDown();
-                            },
-                            log -> {},
-                            statistics -> {
-                                if (audio.durationMs > 0) {
-                                    double fileFrac = Math.min(0.99, statistics.getTime() / audio.durationMs);
-                                    int filePct = (int) Math.round(fileFrac * 100.0);
-                                    int overallPct = (int) Math.min(99, Math.round(((fileIndex + fileFrac) / totalCount) * 100.0));
-                                    runUi(() -> {
-                                        progressBar.setProgress(overallPct);
-                                        if (totalCount == 1) {
-                                            tvStatus.setText("Конвертация: " + filePct + "%");
-                                        } else {
-                                            tvStatus.setText("Файл " + (fileIndex + 1) + " из " + totalCount + ": " + filePct + "%");
-                                        }
-                                    });
-                                }
-                            }
-                    );
-
-                    latch.await();
-
-                    if (ok.get() && outputTemp.exists() && outputTemp.length() > 0) {
-                        totalNewSize += outputTemp.length();
-                        lastResult = AudioUtils.saveMp3Output(requireContext(), outputTemp, outName);
-                        successCount++;
+                    String outName;
+                    if (totalCount == 1 && !singleCustomName.isEmpty()) {
+                        outName = singleCustomName;
                     } else {
-                        failCount++;
+                        outName = AudioUtils.stripExtension(audio.displayName) + "_" + targetBitrate + "k";
                     }
-                } catch (Exception e) {
-                    failCount++;
-                } finally {
-                    if (inputTemp != null) //noinspection ResultOfMethodCallIgnored
-                        inputTemp.delete();
-                    if (outputTemp != null) //noinspection ResultOfMethodCallIgnored
-                        outputTemp.delete();
-                }
 
-                final int donePct = (int) Math.round(((i + 1.0) / totalCount) * 100.0);
-                runUi(() -> progressBar.setProgress(donePct));
+                    String prepMsg = totalCount == 1
+                            ? "Подготовка файла..."
+                            : "Файл " + (fileIndex + 1) + " из " + totalCount + ": " + audio.displayName;
+                    runUi(() -> tvStatus.setText(prepMsg));
+                    AudioProcessingService.updateProgress(appCtx, notifTitle, prepMsg, (int) Math.round((fileIndex * 100.0) / totalCount), false);
+
+                    File inputTemp = null;
+                    File outputTemp = null;
+                    try {
+                        inputTemp = AudioUtils.copyUriToCache(appCtx, audio.uri, "conv_in_" + i);
+                        if (isCancelled.get()) break;
+                        outputTemp = new File(appCtx.getCacheDir(), "conv_out_" + i + "_" + System.currentTimeMillis() + ".mp3");
+
+                        String[] args = new String[]{
+                                "-y",
+                                "-i", inputTemp.getAbsolutePath(),
+                                "-vn",
+                                "-c:a", "libmp3lame",
+                                "-b:a", targetBitrate + "k",
+                                "-map_metadata", "0",
+                                outputTemp.getAbsolutePath()
+                        };
+
+                        CountDownLatch latch = new CountDownLatch(1);
+                        AtomicBoolean ok = new AtomicBoolean(false);
+                        final long[] lastNotifMs = {0L};
+
+                        var session = FFmpegKit.executeWithArgumentsAsync(args,
+                                s -> {
+                                    ok.set(!isCancelled.get() && ReturnCode.isSuccess(s.getReturnCode()));
+                                    latch.countDown();
+                                },
+                                log -> {},
+                                statistics -> {
+                                    if (audio.durationMs > 0 && !isCancelled.get()) {
+                                        double fileFrac = Math.min(0.99, statistics.getTime() / audio.durationMs);
+                                        int filePct = (int) Math.round(fileFrac * 100.0);
+                                        int overallPct = (int) Math.min(99, Math.round(((fileIndex + fileFrac) / totalCount) * 100.0));
+                                        String stText = totalCount == 1
+                                                ? ("Конвертация: " + filePct + "%")
+                                                : ("Файл " + (fileIndex + 1) + " из " + totalCount + ": " + filePct + "%");
+                                        runUi(() -> {
+                                            progressBar.setProgress(overallPct);
+                                            tvStatus.setText(stText);
+                                        });
+                                        long now = System.currentTimeMillis();
+                                        if (now - lastNotifMs[0] > 500) {
+                                            lastNotifMs[0] = now;
+                                            AudioProcessingService.updateProgress(appCtx, notifTitle, stText, overallPct, false);
+                                        }
+                                    }
+                                }
+                        );
+                        activeSessionId = session.getSessionId();
+                        latch.await();
+                        activeSessionId = -1;
+
+                        if (isCancelled.get()) break;
+
+                        if (ok.get() && outputTemp.exists() && outputTemp.length() > 0) {
+                            totalNewSize += outputTemp.length();
+                            lastResult = AudioUtils.saveMp3Output(appCtx, outputTemp, outName);
+                            successCount++;
+                        } else {
+                            failCount++;
+                        }
+                    } catch (Exception e) {
+                        if (!isCancelled.get()) failCount++;
+                    } finally {
+                        if (inputTemp != null) //noinspection ResultOfMethodCallIgnored
+                            inputTemp.delete();
+                        if (outputTemp != null) //noinspection ResultOfMethodCallIgnored
+                            outputTemp.delete();
+                    }
+
+                    final int donePct = (int) Math.round(((i + 1.0) / totalCount) * 100.0);
+                    runUi(() -> progressBar.setProgress(donePct));
+                }
+            } finally {
+                activeSessionId = -1;
+                AudioProcessingService.stopTask(appCtx);
             }
 
+            final boolean wasCancelled = isCancelled.get();
             final int finalSuccess = successCount;
             final int finalFail = failCount;
             final long finalOrigSize = totalOrigSize;
@@ -314,6 +353,15 @@ public class ConvertFragment extends Fragment {
                 layoutProgress.setVisibility(View.GONE);
                 btnStartConvert.setEnabled(!selectedAudios.isEmpty());
                 btnClear.setEnabled(true);
+                btnCancelConvert.setEnabled(true);
+
+                if (wasCancelled) {
+                    String msg = finalSuccess > 0
+                            ? ("Отменено (успело сохраниться: " + finalSuccess + " из " + totalCount + ")")
+                            : "Конвертация отменена";
+                    Toast.makeText(getContext(), msg, Toast.LENGTH_SHORT).show();
+                    return;
+                }
 
                 if (finalSuccess == 0) {
                     Toast.makeText(getContext(), "Не удалось конвертировать файлы", Toast.LENGTH_LONG).show();
@@ -333,7 +381,7 @@ public class ConvertFragment extends Fragment {
                 } else {
                     lastSavedUri = finalLastRes != null ? finalLastRes.uri : null;
                     layoutResultActions.setVisibility(View.GONE);
-                    String folderName = AudioUtils.getSaveFolderDisplayName(requireContext());
+                    String folderName = AudioUtils.getSaveFolderDisplayName(appCtx);
                     String failNote = finalFail > 0 ? (" (ошибок: " + finalFail + ")") : "";
                     tvResultInfo.setText(
                             "Готово! Конвертировано: " + finalSuccess + " из " + totalCount + failNote + "\n" +

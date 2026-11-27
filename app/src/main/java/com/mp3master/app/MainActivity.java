@@ -1,5 +1,8 @@
 package com.mp3master.app;
 
+import android.Manifest;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
 import android.widget.ImageButton;
@@ -30,11 +33,19 @@ public class MainActivity extends AppCompatActivity {
     private TextView tvSaveFolderPath;
     private ImageButton btnResetSaveFolder;
 
+    private final ActivityResultLauncher<String> requestNotificationPermissionLauncher =
+            registerForActivityResult(new ActivityResultContracts.RequestPermission(), granted -> {});
+
     private final ActivityResultLauncher<android.net.Uri> pickFolderLauncher =
             registerForActivityResult(new ActivityResultContracts.OpenDocumentTree(), uri -> {
                 if (uri != null) {
                     AudioUtils.setSaveFolderUri(this, uri);
                     updateSaveFolderBar();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                requestNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS);
+            }
+        }
                     Toast.makeText(this, "Папка сохранения изменена", Toast.LENGTH_SHORT).show();
                 }
             });

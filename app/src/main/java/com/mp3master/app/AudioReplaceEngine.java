@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class AudioReplaceEngine {
 
@@ -198,7 +199,7 @@ public class AudioReplaceEngine {
         return new FeatureSet(F, n, hop / fs, win / fs);
     }
 
-    public static DtwResult subsequenceDtw(float[] A, int nA, float[] B, int offsetBFrames, int nB, ProgressCallback progress) {
+    public static DtwResult subsequenceDtw(float[] A, int nA, float[] B, int offsetBFrames, int nB, ProgressCallback progress, AtomicBoolean cancelFlag) {
         float[] pD = new float[nB];
         int[] pS = new int[nB];
         int[] pL = new int[nB];
@@ -216,6 +217,9 @@ public class AudioReplaceEngine {
 
         int reportStep = Math.max(1, nA / 40);
         for (int i = 1; i < nA; i++) {
+            if (cancelFlag != null && cancelFlag.get()) {
+                return null;
+            }
             for (int j = 0; j < nB; j++) {
                 float c = frameDist(A, i, B, offsetBFrames + j);
                 float bd = pD[j] + c + PEN;
@@ -420,5 +424,29 @@ public class AudioReplaceEngine {
             result.add(new Candidate(r.sc[j], s, Math.max(s + 0.1, e)));
         }
         return result;
+    }
+
+    public static float[] computeWaveformPeaks(short[] pcm, int maxBars) {
+        if (pcm == null || pcm.length == 0) return new float[0];
+        int barCount = Math.max(120, Math.min(maxBars, pcm.length / 200));
+        float[] peaks = new float[barCount];
+        double samplesPerBar = (double) pcm.length / barCount;
+        float maxGlobal = 0.01f;
+        for (int b = 0; b < barCount; b++) {
+            int start = (int) (b * samplesPerBar);
+            int end = Math.min(pcm.length, (int) ((b + 1) * samplesPerBar));
+            int step = Math.max(1, (end - start) / 64);
+            float localMax = 0f;
+            for (int i = start; i < end; i += step) {
+                float amp = Math.abs(pcm[i]) / 32768f;
+                if (amp > localMax) localMax = amp;
+            }
+            peaks[b] = localMax;
+            if (localMax > maxGlobal) maxGlobal = localMax;
+        }
+        for (int b = 0; b < barCount; b++) {
+            peaks[b] = Math.min(1f, peaks[b] / maxGlobal);
+        }
+        return peaks;
     }
 }

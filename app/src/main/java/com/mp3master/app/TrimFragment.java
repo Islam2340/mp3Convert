@@ -1,5 +1,6 @@
 package com.mp3master.app;
 
+import android.content.Context;
 import android.net.Uri;
 import android.os.Bundle;
 import android.view.LayoutInflater;
@@ -26,6 +27,7 @@ import java.io.File;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class TrimFragment extends Fragment {
 
@@ -33,10 +35,12 @@ public class TrimFragment extends Fragment {
     private Uri lastSavedUri;
     private TrimEditorController editorController;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final AtomicBoolean isCancelled = new AtomicBoolean(false);
+    private volatile long activeSessionId = -1;
 
     private TextView tvFileInfo, tvStatus, tvResultInfo;
     private MaterialCardView cardControls, cardResult;
-    private MaterialButton btnStartTrim;
+    private MaterialButton btnStartTrim, btnCancelTrim;
     private MaterialSwitch switchFast;
     private TextInputEditText etOutputName;
     private View layoutProgress;
@@ -62,6 +66,7 @@ public class TrimFragment extends Fragment {
         switchFast = view.findViewById(R.id.switchTrimFast);
         etOutputName = view.findViewById(R.id.etTrimOutputName);
         btnStartTrim = view.findViewById(R.id.btnStartTrim);
+        btnCancelTrim = view.findViewById(R.id.btnCancelTrim);
         layoutProgress = view.findViewById(R.id.layoutTrimProgress);
         progressBar = view.findViewById(R.id.progressTrim);
         tvStatus = view.findViewById(R.id.tvTrimStatus);
@@ -72,6 +77,16 @@ public class TrimFragment extends Fragment {
 
         btnPick.setOnClickListener(v -> pickAudioLauncher.launch(new String[]{"audio/mpeg", "audio/*"}));
         btnStartTrim.setOnClickListener(v -> startTrim());
+        btnCancelTrim.setOnClickListener(v -> {
+            isCancelled.set(true);
+            btnCancelTrim.setEnabled(false);
+            tvStatus.setText("Отмена...");
+            if (activeSessionId > 0) {
+                FFmpegKit.cancel(activeSessionId);
+            } else {
+                FFmpegKit.cancel();
+            }
+        });
 
         view.findViewById(R.id.btnTrimOpen).setOnClickListener(v -> {
             if (lastSavedUri != null && getContext() != null) {
@@ -124,19 +139,31 @@ public class TrimFragment extends Fragment {
         }
         final String finalOutputName = outputName;
         final boolean fastCopy = switchFast.isChecked();
+        final Context appCtx = requireContext().getApplicationContext();
 
+        isCancelled.set(false);
+        activeSessionId = -1;
         btnStartTrim.setEnabled(false);
+        btnCancelTrim.setEnabled(true);
         cardResult.setVisibility(View.GONE);
         layoutProgress.setVisibility(View.VISIBLE);
         progressBar.setIndeterminate(true);
         tvStatus.setText("Подготовка файла...");
+        AudioProcessingService.startTask(appCtx, "Обрезка MP3", "Подготовка файла...");
 
         executor.execute(() -> {
             File inputTemp = null;
             File outputTemp = null;
             try {
-                inputTemp = AudioUtils.copyUriToCache(requireContext(), selectedAudio.uri, "trim_in");
-                outputTemp = new File(requireContext().getCacheDir(), "trim_out_" + System.currentTimeMillis() + ".mp3");
+                inputTemp = AudioUtils.copyUriToCache(appCtx, selectedAudio.uri, "trim_in");
+                if (isCancelled.get()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    inputTemp.delete();
+                    AudioProcessingService.stopTask(appCtx);
+                    showCancelled();
+                    return;
+                }
+                outputTemp = new File(appCtx.getCacheDir(), "trim_out_" + System.currentTimeMillis() + ".mp3");
 
                 String startStr = String.format(Locale.US, "%.3f", startMs / 1000.0);
                 String endStr = String.format(Locale.US, "%.3f", endMs / 1000.0);
@@ -170,21 +197,26 @@ public class TrimFragment extends Fragment {
 
                 final File finalInput = inputTemp;
                 final File finalOutput = outputTemp;
+                final long[] lastNotifMs = {0L};
 
-                requireActivity().runOnUiThread(() -> {
+                runUi(() -> {
                     progressBar.setIndeterminate(false);
                     progressBar.setProgress(0);
                     tvStatus.setText("Обрезка: 0%");
                 });
 
-                FFmpegKit.executeWithArgumentsAsync(args,
-                        session -> {
-                            if (ReturnCode.isSuccess(session.getReturnCode())) {
+                var session = FFmpegKit.executeWithArgumentsAsync(args,
+                        s -> {
+                            activeSessionId = -1;
+                            AudioProcessingService.stopTask(appCtx);
+                            if (isCancelled.get() || ReturnCode.isCancel(s.getReturnCode())) {
+                                showCancelled();
+                            } else if (ReturnCode.isSuccess(s.getReturnCode())) {
                                 try {
                                     long newSize = finalOutput.length();
-                                    AudioUtils.SaveResult res = AudioUtils.saveMp3Output(requireContext(), finalOutput, finalOutputName);
+                                    AudioUtils.SaveResult res = AudioUtils.saveMp3Output(appCtx, finalOutput, finalOutputName);
                                     lastSavedUri = res.uri;
-                                    requireActivity().runOnUiThread(() -> {
+                                    runUi(() -> {
                                         layoutProgress.setVisibility(View.GONE);
                                         btnStartTrim.setEnabled(true);
                                         cardResult.setVisibility(View.VISIBLE);
@@ -207,18 +239,24 @@ public class TrimFragment extends Fragment {
                         },
                         log -> {},
                         statistics -> {
-                            if (clipDurationMs > 0) {
+                            if (clipDurationMs > 0 && !isCancelled.get()) {
                                 int pct = (int) Math.min(99, Math.round((statistics.getTime() / clipDurationMs) * 100.0));
-                                if (isAdded()) {
-                                    requireActivity().runOnUiThread(() -> {
-                                        progressBar.setProgress(pct);
-                                        tvStatus.setText("Обрезка: " + pct + "%");
-                                    });
+                                runUi(() -> {
+                                    progressBar.setProgress(pct);
+                                    tvStatus.setText("Обрезка: " + pct + "%");
+                                });
+                                long now = System.currentTimeMillis();
+                                if (now - lastNotifMs[0] > 500) {
+                                    lastNotifMs[0] = now;
+                                    AudioProcessingService.updateProgress(appCtx, "Обрезка MP3", "Обрезка: " + pct + "%", pct, false);
                                 }
                             }
                         }
                 );
+                activeSessionId = session.getSessionId();
             } catch (Exception e) {
+                activeSessionId = -1;
+                AudioProcessingService.stopTask(appCtx);
                 if (inputTemp != null) //noinspection ResultOfMethodCallIgnored
                     inputTemp.delete();
                 if (outputTemp != null) //noinspection ResultOfMethodCallIgnored
@@ -228,13 +266,28 @@ public class TrimFragment extends Fragment {
         });
     }
 
-    private void showError(String msg) {
-        if (!isAdded()) return;
-        requireActivity().runOnUiThread(() -> {
+    private void showCancelled() {
+        runUi(() -> {
             layoutProgress.setVisibility(View.GONE);
             btnStartTrim.setEnabled(true);
+            btnCancelTrim.setEnabled(true);
+            Toast.makeText(getContext(), "Обрезка отменена", Toast.LENGTH_SHORT).show();
+        });
+    }
+
+    private void showError(String msg) {
+        runUi(() -> {
+            layoutProgress.setVisibility(View.GONE);
+            btnStartTrim.setEnabled(true);
+            btnCancelTrim.setEnabled(true);
             Toast.makeText(getContext(), msg, Toast.LENGTH_LONG).show();
         });
+    }
+
+    private void runUi(Runnable r) {
+        if (isAdded() && getActivity() != null) {
+            getActivity().runOnUiThread(r);
+        }
     }
 
     @Override

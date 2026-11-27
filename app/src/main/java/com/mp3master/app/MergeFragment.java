@@ -1,6 +1,7 @@
 package com.mp3master.app;
 
 import android.app.Dialog;
+import android.content.Context;
 import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Bundle;
@@ -34,15 +35,24 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MergeFragment extends Fragment {
+
+    private static final int TRANS_DIRECT = 0;
+    private static final int TRANS_PAUSE_1S = 1;
+    private static final int TRANS_PAUSE_2S = 2;
+    private static final int TRANS_CROSSFADE = 3;
 
     private final List<AudioUtils.AudioInfo> mergeItems = new ArrayList<>();
     private MergeAdapter adapter;
     private int selectedBitrate = 192;
+    private int selectedTransition = TRANS_DIRECT;
     private Uri lastSavedUri;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final ExecutorService previewExecutor = Executors.newSingleThreadExecutor();
+    private final AtomicBoolean isCancelled = new AtomicBoolean(false);
+    private volatile long activeSessionId = -1;
 
     private MediaPlayer transitionPlayer;
     private int playingTransitionIndex = -1;
@@ -50,7 +60,7 @@ public class MergeFragment extends Fragment {
     private File lastTransitionFile;
 
     private TextView tvEmpty, tvStatus, tvResultInfo;
-    private MaterialButton btnClear, btnStartMerge;
+    private MaterialButton btnClear, btnStartMerge, btnCancelMerge;
     private TextInputEditText etOutputName;
     private View layoutProgress;
     private LinearProgressIndicator progressBar;
@@ -76,9 +86,11 @@ public class MergeFragment extends Fragment {
         btnClear = view.findViewById(R.id.btnClearMergeList);
         tvEmpty = view.findViewById(R.id.tvMergeEmpty);
         RecyclerView rv = view.findViewById(R.id.rvMergeFiles);
-        ChipGroup chipGroup = view.findViewById(R.id.chipGroupMergeBitrate);
+        ChipGroup chipGroupBitrate = view.findViewById(R.id.chipGroupMergeBitrate);
+        ChipGroup chipGroupTransition = view.findViewById(R.id.chipGroupMergeTransition);
         etOutputName = view.findViewById(R.id.etMergeOutputName);
         btnStartMerge = view.findViewById(R.id.btnStartMerge);
+        btnCancelMerge = view.findViewById(R.id.btnCancelMerge);
         layoutProgress = view.findViewById(R.id.layoutMergeProgress);
         progressBar = view.findViewById(R.id.progressMerge);
         tvStatus = view.findViewById(R.id.tvMergeStatus);
@@ -139,7 +151,7 @@ public class MergeFragment extends Fragment {
             refreshListUi();
         });
 
-        chipGroup.setOnCheckedStateChangeListener((group, checkedIds) -> {
+        chipGroupBitrate.setOnCheckedStateChangeListener((group, checkedIds) -> {
             if (checkedIds.isEmpty()) return;
             int id = checkedIds.get(0);
             if (id == R.id.chipMerge96) selectedBitrate = 96;
@@ -149,7 +161,27 @@ public class MergeFragment extends Fragment {
             else if (id == R.id.chipMerge320) selectedBitrate = 320;
         });
 
+        chipGroupTransition.setOnCheckedStateChangeListener((group, checkedIds) -> {
+            if (checkedIds.isEmpty()) return;
+            stopTransitionPreview();
+            int id = checkedIds.get(0);
+            if (id == R.id.chipTransDirect) selectedTransition = TRANS_DIRECT;
+            else if (id == R.id.chipTransPause1) selectedTransition = TRANS_PAUSE_1S;
+            else if (id == R.id.chipTransPause2) selectedTransition = TRANS_PAUSE_2S;
+            else if (id == R.id.chipTransCrossfade) selectedTransition = TRANS_CROSSFADE;
+        });
+
         btnStartMerge.setOnClickListener(v -> startMerge());
+        btnCancelMerge.setOnClickListener(v -> {
+            isCancelled.set(true);
+            btnCancelMerge.setEnabled(false);
+            tvStatus.setText("Отмена...");
+            if (activeSessionId > 0) {
+                FFmpegKit.cancel(activeSessionId);
+            } else {
+                FFmpegKit.cancel();
+            }
+        });
 
         view.findViewById(R.id.btnMergeOpen).setOnClickListener(v -> {
             if (lastSavedUri != null && getContext() != null) {
@@ -176,6 +208,8 @@ public class MergeFragment extends Fragment {
 
         AudioUtils.AudioInfo first = mergeItems.get(position);
         AudioUtils.AudioInfo second = mergeItems.get(position + 1);
+        final int transMode = selectedTransition;
+        final Context appCtx = requireContext().getApplicationContext();
 
         loadingTransitionIndex = position;
         adapter.setTransitionState(loadingTransitionIndex, -1);
@@ -197,23 +231,43 @@ public class MergeFragment extends Fragment {
             File tmp2 = null;
             File outPreview = null;
             try {
-                tmp1 = AudioUtils.copyUriToCache(requireContext(), first.uri, "tr_a");
-                tmp2 = AudioUtils.copyUriToCache(requireContext(), second.uri, "tr_b");
-                outPreview = new File(requireContext().getCacheDir(), "tr_preview_" + System.currentTimeMillis() + ".mp3");
+                tmp1 = AudioUtils.copyUriToCache(appCtx, first.uri, "tr_a");
+                tmp2 = AudioUtils.copyUriToCache(appCtx, second.uri, "tr_b");
+                outPreview = new File(appCtx.getCacheDir(), "tr_preview_" + System.currentTimeMillis() + ".mp3");
 
                 String ss1 = String.format(Locale.US, "%.3f", clip1StartMs / 1000.0);
                 String t1 = String.format(Locale.US, "%.3f", clip1DurMs / 1000.0);
                 String ss2 = String.format(Locale.US, "%.3f", clip2StartMs / 1000.0);
                 String t2 = String.format(Locale.US, "%.3f", clip2DurMs / 1000.0);
 
+                String filterComplex;
+                if (transMode == TRANS_PAUSE_1S || transMode == TRANS_PAUSE_2S) {
+                    String pauseDur = (transMode == TRANS_PAUSE_1S) ? "1.0" : "2.0";
+                    filterComplex =
+                            "[0:a]aformat=sample_rates=44100:channel_layouts=stereo[a0];" +
+                            "anullsrc=r=44100:cl=stereo,atrim=0:" + pauseDur + ",asetpts=PTS-STARTPTS[s0];" +
+                            "[1:a]aformat=sample_rates=44100:channel_layouts=stereo[a1];" +
+                            "[a0][s0][a1]concat=n=3:v=0:a=1[out]";
+                } else if (transMode == TRANS_CROSSFADE) {
+                    double minSec = Math.min(clip1DurMs, clip2DurMs) / 1000.0;
+                    double cfSec = Math.min(1.5, Math.max(0.2, minSec * 0.4));
+                    String cfStr = String.format(Locale.US, "%.2f", cfSec);
+                    filterComplex =
+                            "[0:a]aformat=sample_rates=44100:channel_layouts=stereo[a0];" +
+                            "[1:a]aformat=sample_rates=44100:channel_layouts=stereo[a1];" +
+                            "[a0][a1]acrossfade=d=" + cfStr + ":c1=tri:c2=tri[out]";
+                } else {
+                    filterComplex =
+                            "[0:a]aformat=sample_rates=44100:channel_layouts=stereo[a0];" +
+                            "[1:a]aformat=sample_rates=44100:channel_layouts=stereo[a1];" +
+                            "[a0][a1]concat=n=2:v=0:a=1[out]";
+                }
+
                 String[] args = new String[]{
                         "-y",
                         "-ss", ss1, "-t", t1, "-i", tmp1.getAbsolutePath(),
                         "-ss", ss2, "-t", t2, "-i", tmp2.getAbsolutePath(),
-                        "-filter_complex",
-                        "[0:a]aformat=sample_rates=44100:channel_layouts=stereo[a0];" +
-                        "[1:a]aformat=sample_rates=44100:channel_layouts=stereo[a1];" +
-                        "[a0][a1]concat=n=2:v=0:a=1[out]",
+                        "-filter_complex", filterComplex,
                         "-map", "[out]",
                         "-c:a", "libmp3lame",
                         "-b:a", "128k",
@@ -228,9 +282,8 @@ public class MergeFragment extends Fragment {
 
                 final File finalOut = outPreview;
                 if (ReturnCode.isSuccess(session.getReturnCode()) && finalOut.exists() && isAdded()) {
-                    requireActivity().runOnUiThread(() -> {
+                    runUi(() -> {
                         if (loadingTransitionIndex != position) {
-                            // User cancelled while rendering
                             //noinspection ResultOfMethodCallIgnored
                             finalOut.delete();
                             return;
@@ -240,13 +293,11 @@ public class MergeFragment extends Fragment {
                 } else {
                     if (finalOut != null) //noinspection ResultOfMethodCallIgnored
                         finalOut.delete();
-                    if (isAdded()) {
-                        requireActivity().runOnUiThread(() -> {
-                            loadingTransitionIndex = -1;
-                            adapter.setTransitionState(-1, -1);
-                            Toast.makeText(getContext(), "Не удалось собрать превью перехода", Toast.LENGTH_SHORT).show();
-                        });
-                    }
+                    runUi(() -> {
+                        loadingTransitionIndex = -1;
+                        adapter.setTransitionState(-1, -1);
+                        Toast.makeText(getContext(), "Не удалось собрать превью перехода", Toast.LENGTH_SHORT).show();
+                    });
                 }
             } catch (Exception e) {
                 if (tmp1 != null) //noinspection ResultOfMethodCallIgnored
@@ -255,13 +306,11 @@ public class MergeFragment extends Fragment {
                     tmp2.delete();
                 if (outPreview != null) //noinspection ResultOfMethodCallIgnored
                     outPreview.delete();
-                if (isAdded()) {
-                    requireActivity().runOnUiThread(() -> {
-                        loadingTransitionIndex = -1;
-                        adapter.setTransitionState(-1, -1);
-                        Toast.makeText(getContext(), "Ошибка превью: " + e.getMessage(), Toast.LENGTH_SHORT).show();
-                    });
-                }
+                runUi(() -> {
+                    loadingTransitionIndex = -1;
+                    adapter.setTransitionState(-1, -1);
+                    Toast.makeText(getContext(), "Ошибка превью: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                });
             }
         });
     }
@@ -366,33 +415,63 @@ public class MergeFragment extends Fragment {
         }
         final String finalOutputName = outputName;
         final List<AudioUtils.AudioInfo> snapshot = new ArrayList<>(mergeItems);
+        final int transMode = selectedTransition;
+        final int targetBr = selectedBitrate;
+        final Context appCtx = requireContext().getApplicationContext();
 
         long totalDurMs = 0;
+        long minClipMs = Long.MAX_VALUE;
         for (AudioUtils.AudioInfo item : snapshot) {
-            totalDurMs += item.getEffectiveDurationMs();
+            long d = item.getEffectiveDurationMs();
+            totalDurMs += d;
+            if (d > 0 && d < minClipMs) minClipMs = d;
+        }
+        int seams = snapshot.size() - 1;
+        double cfSec = 1.5;
+        if (transMode == TRANS_PAUSE_1S) {
+            totalDurMs += seams * 1000L;
+        } else if (transMode == TRANS_PAUSE_2S) {
+            totalDurMs += seams * 2000L;
+        } else if (transMode == TRANS_CROSSFADE) {
+            if (minClipMs == Long.MAX_VALUE) minClipMs = 4000L;
+            cfSec = Math.min(1.5, Math.max(0.2, (minClipMs / 1000.0) * 0.4));
+            totalDurMs = Math.max(1000L, totalDurMs - Math.round(seams * cfSec * 1000.0));
         }
         final long expectedDurationMs = totalDurMs;
+        final double finalCfSec = cfSec;
 
+        isCancelled.set(false);
+        activeSessionId = -1;
         btnStartMerge.setEnabled(false);
+        btnCancelMerge.setEnabled(true);
         cardResult.setVisibility(View.GONE);
         layoutProgress.setVisibility(View.VISIBLE);
         progressBar.setIndeterminate(true);
         tvStatus.setText("Подготовка файлов (" + snapshot.size() + " шт.)...");
+        AudioProcessingService.startTask(appCtx, "Соединение MP3", "Подготовка файлов...");
 
         executor.execute(() -> {
             List<File> tempInputs = new ArrayList<>();
             File outputTemp = null;
             try {
                 for (int i = 0; i < snapshot.size(); i++) {
-                    tempInputs.add(AudioUtils.copyUriToCache(requireContext(), snapshot.get(i).uri, "merge_in_" + i));
+                    if (isCancelled.get()) {
+                        for (File f : tempInputs) //noinspection ResultOfMethodCallIgnored
+                            f.delete();
+                        AudioProcessingService.stopTask(appCtx);
+                        showCancelled();
+                        return;
+                    }
+                    tempInputs.add(AudioUtils.copyUriToCache(appCtx, snapshot.get(i).uri, "merge_in_" + i));
                 }
-                outputTemp = new File(requireContext().getCacheDir(), "merge_out_" + System.currentTimeMillis() + ".mp3");
+                outputTemp = new File(appCtx.getCacheDir(), "merge_out_" + System.currentTimeMillis() + ".mp3");
 
                 List<String> argsList = new ArrayList<>();
                 argsList.add("-y");
                 StringBuilder filter = new StringBuilder();
-                StringBuilder concatInputs = new StringBuilder();
-                for (int i = 0; i < tempInputs.size(); i++) {
+                int count = tempInputs.size();
+
+                for (int i = 0; i < count; i++) {
                     AudioUtils.AudioInfo info = snapshot.get(i);
                     argsList.add("-i");
                     argsList.add(tempInputs.get(i).getAbsolutePath());
@@ -404,9 +483,40 @@ public class MergeFragment extends Fragment {
                         filter.append("atrim=start=").append(s).append(":end=").append(e).append(",asetpts=PTS-STARTPTS,");
                     }
                     filter.append("aformat=sample_rates=44100:channel_layouts=stereo[a").append(i).append("];");
-                    concatInputs.append("[a").append(i).append("]");
                 }
-                filter.append(concatInputs).append("concat=n=").append(tempInputs.size()).append(":v=0:a=1[out]");
+
+                if (transMode == TRANS_PAUSE_1S || transMode == TRANS_PAUSE_2S) {
+                    String pauseStr = (transMode == TRANS_PAUSE_1S) ? "1.0" : "2.0";
+                    StringBuilder concatInputs = new StringBuilder();
+                    for (int i = 0; i < count; i++) {
+                        concatInputs.append("[a").append(i).append("]");
+                        if (i < count - 1) {
+                            filter.append("anullsrc=r=44100:cl=stereo,atrim=0:")
+                                  .append(pauseStr)
+                                  .append(",asetpts=PTS-STARTPTS[s").append(i).append("];");
+                            concatInputs.append("[s").append(i).append("]");
+                        }
+                    }
+                    filter.append(concatInputs)
+                          .append("concat=n=").append(count * 2 - 1).append(":v=0:a=1[out]");
+                } else if (transMode == TRANS_CROSSFADE) {
+                    String cfStr = String.format(Locale.US, "%.2f", finalCfSec);
+                    String prevLabel = "a0";
+                    for (int i = 1; i < count; i++) {
+                        String nextLabel = (i == count - 1) ? "out" : ("cf" + i);
+                        filter.append("[").append(prevLabel).append("][a").append(i).append("]")
+                              .append("acrossfade=d=").append(cfStr).append(":c1=tri:c2=tri[")
+                              .append(nextLabel).append("]");
+                        if (i < count - 1) filter.append(";");
+                        prevLabel = nextLabel;
+                    }
+                } else {
+                    StringBuilder concatInputs = new StringBuilder();
+                    for (int i = 0; i < count; i++) {
+                        concatInputs.append("[a").append(i).append("]");
+                    }
+                    filter.append(concatInputs).append("concat=n=").append(count).append(":v=0:a=1[out]");
+                }
 
                 argsList.add("-filter_complex");
                 argsList.add(filter.toString());
@@ -415,26 +525,31 @@ public class MergeFragment extends Fragment {
                 argsList.add("-c:a");
                 argsList.add("libmp3lame");
                 argsList.add("-b:a");
-                argsList.add(selectedBitrate + "k");
+                argsList.add(targetBr + "k");
                 argsList.add(outputTemp.getAbsolutePath());
 
                 String[] args = argsList.toArray(new String[0]);
                 final File finalOutput = outputTemp;
+                final long[] lastNotifMs = {0L};
 
-                requireActivity().runOnUiThread(() -> {
+                runUi(() -> {
                     progressBar.setIndeterminate(false);
                     progressBar.setProgress(0);
                     tvStatus.setText("Соединение: 0%");
                 });
 
-                FFmpegKit.executeWithArgumentsAsync(args,
-                        session -> {
-                            if (ReturnCode.isSuccess(session.getReturnCode())) {
+                var session = FFmpegKit.executeWithArgumentsAsync(args,
+                        s -> {
+                            activeSessionId = -1;
+                            AudioProcessingService.stopTask(appCtx);
+                            if (isCancelled.get() || ReturnCode.isCancel(s.getReturnCode())) {
+                                showCancelled();
+                            } else if (ReturnCode.isSuccess(s.getReturnCode())) {
                                 try {
                                     long newSize = finalOutput.length();
-                                    AudioUtils.SaveResult res = AudioUtils.saveMp3Output(requireContext(), finalOutput, finalOutputName);
+                                    AudioUtils.SaveResult res = AudioUtils.saveMp3Output(appCtx, finalOutput, finalOutputName);
                                     lastSavedUri = res.uri;
-                                    requireActivity().runOnUiThread(() -> {
+                                    runUi(() -> {
                                         layoutProgress.setVisibility(View.GONE);
                                         btnStartMerge.setEnabled(mergeItems.size() >= 2);
                                         cardResult.setVisibility(View.VISIBLE);
@@ -443,7 +558,7 @@ public class MergeFragment extends Fragment {
                                                 "Сохранено в " + res.displayPath + "\n" +
                                                 "Длительность: " + AudioUtils.formatTimeMs(expectedDurationMs) +
                                                 "  •  Размер: " + AudioUtils.formatSize(newSize) +
-                                                " (" + selectedBitrate + " кбит/с)"
+                                                " (" + targetBr + " кбит/с)"
                                         );
                                     });
                                 } catch (Exception e) {
@@ -459,18 +574,24 @@ public class MergeFragment extends Fragment {
                         },
                         log -> {},
                         statistics -> {
-                            if (expectedDurationMs > 0) {
+                            if (expectedDurationMs > 0 && !isCancelled.get()) {
                                 int pct = (int) Math.min(99, Math.round((statistics.getTime() / expectedDurationMs) * 100.0));
-                                if (isAdded()) {
-                                    requireActivity().runOnUiThread(() -> {
-                                        progressBar.setProgress(pct);
-                                        tvStatus.setText("Соединение: " + pct + "%");
-                                    });
+                                runUi(() -> {
+                                    progressBar.setProgress(pct);
+                                    tvStatus.setText("Соединение: " + pct + "%");
+                                });
+                                long now = System.currentTimeMillis();
+                                if (now - lastNotifMs[0] > 500) {
+                                    lastNotifMs[0] = now;
+                                    AudioProcessingService.updateProgress(appCtx, "Соединение MP3", "Соединение: " + pct + "%", pct, false);
                                 }
                             }
                         }
                 );
+                activeSessionId = session.getSessionId();
             } catch (Exception e) {
+                activeSessionId = -1;
+                AudioProcessingService.stopTask(appCtx);
                 for (File f : tempInputs) //noinspection ResultOfMethodCallIgnored
                     f.delete();
                 if (outputTemp != null) //noinspection ResultOfMethodCallIgnored
@@ -480,13 +601,28 @@ public class MergeFragment extends Fragment {
         });
     }
 
-    private void showError(String msg) {
-        if (!isAdded()) return;
-        requireActivity().runOnUiThread(() -> {
+    private void showCancelled() {
+        runUi(() -> {
             layoutProgress.setVisibility(View.GONE);
             btnStartMerge.setEnabled(mergeItems.size() >= 2);
+            btnCancelMerge.setEnabled(true);
+            Toast.makeText(getContext(), "Соединение отменено", Toast.LENGTH_SHORT).show();
+        });
+    }
+
+    private void showError(String msg) {
+        runUi(() -> {
+            layoutProgress.setVisibility(View.GONE);
+            btnStartMerge.setEnabled(mergeItems.size() >= 2);
+            btnCancelMerge.setEnabled(true);
             Toast.makeText(getContext(), msg, Toast.LENGTH_LONG).show();
         });
+    }
+
+    private void runUi(Runnable r) {
+        if (isAdded() && getActivity() != null) {
+            getActivity().runOnUiThread(r);
+        }
     }
 
     @Override
