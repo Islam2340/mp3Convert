@@ -1,18 +1,24 @@
 package com.mp3master.app;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.Matrix;
+import android.graphics.SurfaceTexture;
+import android.media.MediaMetadataRetriever;
+import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.LayoutInflater;
+import android.view.Surface;
+import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
-import android.widget.VideoView;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
@@ -29,7 +35,6 @@ import com.google.android.material.card.MaterialCardView;
 import com.google.android.material.chip.ChipGroup;
 import com.google.android.material.materialswitch.MaterialSwitch;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
-import com.google.android.material.slider.RangeSlider;
 import com.google.android.material.textfield.TextInputEditText;
 
 import java.io.File;
@@ -68,12 +73,22 @@ public class VideoFragment extends Fragment {
     private double speedFactor = 1.0;
     private int targetRes = 0; // 0=orig, 1080, 720, 480
 
+    // Frame-accurate MediaPlayer + TextureView
+    private MediaPlayer mediaPlayer;
+    private Surface previewSurface;
+    private boolean isPlayerPrepared = false;
     private boolean isPlayingPreview = false;
+    private int videoNaturalW = 0;
+    private int videoNaturalH = 0;
+    private long lastScrubSeekMs = 0L;
+
     private boolean isUpdatingUi = false;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final ExecutorService filmstripExecutor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean isCancelled = new AtomicBoolean(false);
     private volatile long activeSessionId = -1;
+    private volatile int filmstripGenToken = 0;
 
     private Uri lastResultUri;
     private boolean lastResultIsVideo = true;
@@ -83,11 +98,11 @@ public class VideoFragment extends Fragment {
     private View layoutWorkspace, layoutFillMode, layoutCustomMp3Box, layoutProgress;
     private View panelTrim, panelRotate, panelFormat, panelAudio, panelSpeed, panelQuality;
     private ImageView iconToolTrim, iconToolRotate, iconToolFormat, iconToolAudio, iconToolSpeed, iconToolQuality;
-    private VideoView videoView;
+    private TextureView texturePreview;
+    private VideoFilmstripView videoFilmstrip;
     private ImageButton btnCenterPlayPause;
     private TextView tvActiveClipName, tvTotalTimelineDur, tvVideoPreviewBadge, tvActiveTrimRange;
     private TextView tvVideoStart, tvVideoDuration, tvVideoEnd, tvCustomAudioName, tvStatus, tvResultInfo;
-    private RangeSlider rangeSlider;
     private ChipGroup chipGroupRotate;
     private MaterialSwitch switchFlipH, switchFlipV;
     private TextInputEditText etOutputName;
@@ -97,18 +112,20 @@ public class VideoFragment extends Fragment {
     private final Runnable previewUpdater = new Runnable() {
         @Override
         public void run() {
-            if (videoView != null && isPlayingPreview) {
+            if (mediaPlayer != null && isPlayerPrepared && isPlayingPreview) {
                 try {
                     AudioUtils.VideoInfo clip = getActiveClip();
                     if (clip == null) {
                         pauseVideoPreview();
                         return;
                     }
-                    int pos = videoView.getCurrentPosition();
-                    if (pos >= clip.trimEndMs || !videoView.isPlaying()) {
+                    int pos = mediaPlayer.getCurrentPosition();
+                    videoFilmstrip.setPlayheadMs(pos);
+                    updateTimeReadout(pos);
+                    if (pos >= clip.trimEndMs || !mediaPlayer.isPlaying()) {
                         pauseVideoPreview();
                     } else {
-                        handler.postDelayed(this, 150);
+                        handler.postDelayed(this, 60);
                     }
                 } catch (Exception ignored) {
                 }
@@ -154,7 +171,8 @@ public class VideoFragment extends Fragment {
 
         cardEmpty = view.findViewById(R.id.cardVideoEmpty);
         layoutWorkspace = view.findViewById(R.id.layoutVideoWorkspace);
-        videoView = view.findViewById(R.id.videoViewPreview);
+        texturePreview = view.findViewById(R.id.textureVideoPreview);
+        videoFilmstrip = view.findViewById(R.id.videoFilmstrip);
         btnCenterPlayPause = view.findViewById(R.id.btnCenterPlayPause);
         tvActiveClipName = view.findViewById(R.id.tvActiveClipName);
         tvTotalTimelineDur = view.findViewById(R.id.tvTotalTimelineDur);
@@ -175,7 +193,6 @@ public class VideoFragment extends Fragment {
         iconToolSpeed = view.findViewById(R.id.iconToolSpeed);
         iconToolQuality = view.findViewById(R.id.iconToolQuality);
 
-        rangeSlider = view.findViewById(R.id.rangeSliderVideo);
         tvVideoStart = view.findViewById(R.id.tvVideoStart);
         tvVideoDuration = view.findViewById(R.id.tvVideoDuration);
         tvVideoEnd = view.findViewById(R.id.tvVideoEnd);
@@ -196,6 +213,9 @@ public class VideoFragment extends Fragment {
         btnCancel = view.findViewById(R.id.btnCancelVideo);
         cardResult = view.findViewById(R.id.cardVideoResult);
         tvResultInfo = view.findViewById(R.id.tvVideoResultInfo);
+
+        setupTextureView();
+        setupFilmstrip();
 
         // Horizontal timeline RecyclerView
         RecyclerView rvTimeline = view.findViewById(R.id.rvVideoTimeline);
@@ -238,6 +258,32 @@ public class VideoFragment extends Fragment {
         view.findViewById(R.id.btnQuickPlus1).setOnClickListener(v -> nudgePlayhead(1000));
         view.findViewById(R.id.btnQuickEnding).setOnClickListener(v -> playClipEnding());
 
+        // Set start/end here buttons
+        view.findViewById(R.id.btnVidSetStartHere).setOnClickListener(v -> {
+            AudioUtils.VideoInfo clip = getActiveClip();
+            if (clip == null) return;
+            long pos = videoFilmstrip.getPlayheadMs();
+            if (pos < clip.trimEndMs - 300L) {
+                clip.trimStartMs = pos;
+                videoFilmstrip.setTrimRange(clip.trimStartMs, clip.trimEndMs);
+                updateTrimLabels();
+                clipAdapter.notifyItemChanged(activeClipIndex);
+                updateTotalDurationHeader();
+            }
+        });
+        view.findViewById(R.id.btnVidSetEndHere).setOnClickListener(v -> {
+            AudioUtils.VideoInfo clip = getActiveClip();
+            if (clip == null) return;
+            long pos = videoFilmstrip.getPlayheadMs();
+            if (pos > clip.trimStartMs + 300L) {
+                clip.trimEndMs = pos;
+                videoFilmstrip.setTrimRange(clip.trimStartMs, clip.trimEndMs);
+                updateTrimLabels();
+                clipAdapter.notifyItemChanged(activeClipIndex);
+                updateTotalDurationHeader();
+            }
+        });
+
         // Clip order / delete
         view.findViewById(R.id.btnClipMoveLeft).setOnClickListener(v -> {
             if (activeClipIndex > 0) {
@@ -272,25 +318,6 @@ public class VideoFragment extends Fragment {
         view.findViewById(R.id.toolSpeed).setOnClickListener(v -> selectTool(4));
         view.findViewById(R.id.toolQuality).setOnClickListener(v -> selectTool(5));
 
-        // Trim slider
-        rangeSlider.addOnChangeListener((slider, value, fromUser) -> {
-            if (isUpdatingUi) return;
-            AudioUtils.VideoInfo clip = getActiveClip();
-            if (clip == null) return;
-            List<Float> vals = slider.getValues();
-            clip.trimStartMs = Math.round(vals.get(0) * 1000f);
-            clip.trimEndMs = Math.round(vals.get(1) * 1000f);
-            updateTrimLabels();
-            clipAdapter.notifyItemChanged(activeClipIndex);
-            updateTotalDurationHeader();
-            if (fromUser) {
-                try {
-                    videoView.seekTo(Math.round(value * 1000f));
-                } catch (Exception ignored) {
-                }
-            }
-        });
-
         // Rotate / Flip
         chipGroupRotate.setOnCheckedStateChangeListener((g, ids) -> {
             if (isUpdatingUi || ids.isEmpty()) return;
@@ -301,14 +328,14 @@ public class VideoFragment extends Fragment {
             else if (id == R.id.chipRot90) clip.extraRotateDeg = 90;
             else if (id == R.id.chipRot180) clip.extraRotateDeg = 180;
             else if (id == R.id.chipRot270) clip.extraRotateDeg = 270;
-            applyVisualPreviewTransform();
+            applyTextureTransform();
         });
         switchFlipH.setOnCheckedChangeListener((b, checked) -> {
             if (isUpdatingUi) return;
             AudioUtils.VideoInfo clip = getActiveClip();
             if (clip != null) {
                 clip.flipH = checked;
-                applyVisualPreviewTransform();
+                applyTextureTransform();
             }
         });
         switchFlipV.setOnCheckedChangeListener((b, checked) -> {
@@ -316,7 +343,7 @@ public class VideoFragment extends Fragment {
             AudioUtils.VideoInfo clip = getActiveClip();
             if (clip != null) {
                 clip.flipV = checked;
-                applyVisualPreviewTransform();
+                applyTextureTransform();
             }
         });
 
@@ -405,6 +432,203 @@ public class VideoFragment extends Fragment {
         return view;
     }
 
+    private void setupTextureView() {
+        texturePreview.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
+            @Override
+            public void onSurfaceTextureAvailable(@NonNull SurfaceTexture surface, int width, int height) {
+                previewSurface = new Surface(surface);
+                AudioUtils.VideoInfo clip = getActiveClip();
+                if (clip != null) {
+                    preparePlayerForClip(clip);
+                }
+            }
+
+            @Override
+            public void onSurfaceTextureSizeChanged(@NonNull SurfaceTexture surface, int width, int height) {
+                applyTextureTransform();
+            }
+
+            @Override
+            public boolean onSurfaceTextureDestroyed(@NonNull SurfaceTexture surface) {
+                releasePlayer();
+                if (previewSurface != null) {
+                    previewSurface.release();
+                    previewSurface = null;
+                }
+                return true;
+            }
+
+            @Override
+            public void onSurfaceTextureUpdated(@NonNull SurfaceTexture surface) {
+            }
+        });
+    }
+
+    private void setupFilmstrip() {
+        videoFilmstrip.setListener(new VideoFilmstripView.OnFilmstripListener() {
+            @Override
+            public void onTrimChanged(long startMs, long endMs, boolean isStartHandle, boolean fromUser) {
+                AudioUtils.VideoInfo clip = getActiveClip();
+                if (clip == null) return;
+                if (isPlayingPreview) pauseVideoPreview();
+                clip.trimStartMs = startMs;
+                clip.trimEndMs = endMs;
+                updateTrimLabels();
+                clipAdapter.notifyItemChanged(activeClipIndex);
+                updateTotalDurationHeader();
+                long target = isStartHandle ? startMs : endMs;
+                updateTimeReadout(target);
+                seekPlayerThrottled(target);
+            }
+
+            @Override
+            public void onScrub(long positionMs, boolean fromUser) {
+                if (isPlayingPreview) pauseVideoPreview();
+                updateTimeReadout(positionMs);
+                seekPlayerThrottled(positionMs);
+            }
+
+            @Override
+            public void onTouchFinished() {
+                seekPlayerExact(videoFilmstrip.getPlayheadMs());
+            }
+        });
+    }
+
+    private void seekPlayerThrottled(long ms) {
+        long now = System.currentTimeMillis();
+        if (now - lastScrubSeekMs >= 90) {
+            lastScrubSeekMs = now;
+            seekPlayerExact(ms);
+        }
+    }
+
+    private void seekPlayerExact(long ms) {
+        if (mediaPlayer != null && isPlayerPrepared) {
+            try {
+                mediaPlayer.seekTo(ms, MediaPlayer.SEEK_CLOSEST);
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private void preparePlayerForClip(AudioUtils.VideoInfo clip) {
+        releasePlayer();
+        if (clip == null || previewSurface == null || getContext() == null) return;
+        try {
+            mediaPlayer = new MediaPlayer();
+            mediaPlayer.setDataSource(requireContext(), clip.uri);
+            mediaPlayer.setSurface(previewSurface);
+            mediaPlayer.setOnPreparedListener(mp -> {
+                isPlayerPrepared = true;
+                videoNaturalW = mp.getVideoWidth();
+                videoNaturalH = mp.getVideoHeight();
+                applyTextureTransform();
+                seekPlayerExact(clip.trimStartMs);
+                updateTimeReadout(clip.trimStartMs);
+            });
+            mediaPlayer.setOnCompletionListener(mp -> pauseVideoPreview());
+            mediaPlayer.prepareAsync();
+        } catch (Exception e) {
+            releasePlayer();
+        }
+    }
+
+    private void releasePlayer() {
+        isPlayingPreview = false;
+        isPlayerPrepared = false;
+        handler.removeCallbacks(previewUpdater);
+        if (mediaPlayer != null) {
+            try {
+                if (mediaPlayer.isPlaying()) mediaPlayer.stop();
+                mediaPlayer.release();
+            } catch (Exception ignored) {
+            }
+            mediaPlayer = null;
+        }
+        if (btnCenterPlayPause != null) btnCenterPlayPause.setImageResource(R.drawable.ic_play);
+        if (btnQuickPlay != null) btnQuickPlay.setText("Играть");
+    }
+
+    private void applyTextureTransform() {
+        if (texturePreview == null) return;
+        int viewW = texturePreview.getWidth();
+        int viewH = texturePreview.getHeight();
+        AudioUtils.VideoInfo clip = getActiveClip();
+        if (viewW <= 0 || viewH <= 0 || videoNaturalW <= 0 || videoNaturalH <= 0 || clip == null) return;
+
+        int rot = clip.extraRotateDeg;
+        float vidW = (rot == 90 || rot == 270) ? videoNaturalH : videoNaturalW;
+        float vidH = (rot == 90 || rot == 270) ? videoNaturalW : videoNaturalH;
+
+        float scale = Math.min(viewW / vidW, viewH / vidH);
+        float scaledW = videoNaturalW * scale;
+        float scaledH = videoNaturalH * scale;
+
+        float sx = (scaledW / viewW) * (clip.flipH ? -1f : 1f);
+        float sy = (scaledH / viewH) * (clip.flipV ? -1f : 1f);
+
+        Matrix matrix = new Matrix();
+        float cx = viewW / 2f;
+        float cy = viewH / 2f;
+        matrix.setScale(sx, sy, cx, cy);
+        if (rot != 0) {
+            matrix.postRotate(rot, cx, cy);
+        }
+        texturePreview.setTransform(matrix);
+
+        if (rot != 0 || clip.flipH || clip.flipV) {
+            StringBuilder b = new StringBuilder();
+            if (rot != 0) b.append(rot).append("°");
+            if (clip.flipH) { if (b.length() > 0) b.append(" "); b.append("↔"); }
+            if (clip.flipV) { if (b.length() > 0) b.append(" "); b.append("↕"); }
+            tvVideoPreviewBadge.setText(b.toString());
+            tvVideoPreviewBadge.setVisibility(View.VISIBLE);
+        } else {
+            tvVideoPreviewBadge.setVisibility(View.GONE);
+        }
+    }
+
+    private void loadFilmstripFrames(AudioUtils.VideoInfo clip) {
+        final int token = ++filmstripGenToken;
+        if (clip == null || getContext() == null) return;
+        final Context appCtx = requireContext().getApplicationContext();
+        final Uri uri = clip.uri;
+        final long durMs = Math.max(500L, clip.durationMs);
+
+        filmstripExecutor.execute(() -> {
+            List<Bitmap> result = new ArrayList<>();
+            MediaMetadataRetriever mmr = new MediaMetadataRetriever();
+            try {
+                mmr.setDataSource(appCtx, uri);
+                int count = 12;
+                for (int i = 0; i < count; i++) {
+                    if (token != filmstripGenToken) break;
+                    long timeUs = (durMs * 1000L * i) / count;
+                    Bitmap raw = mmr.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC);
+                    if (raw != null) {
+                        Bitmap scaled = Bitmap.createScaledBitmap(raw, 96, 96, true);
+                        if (scaled != raw) raw.recycle();
+                        result.add(scaled);
+                    }
+                }
+            } catch (Exception ignored) {
+            } finally {
+                try {
+                    mmr.release();
+                } catch (Exception ignored) {
+                }
+            }
+            if (token == filmstripGenToken && !result.isEmpty()) {
+                runUi(() -> {
+                    if (token == filmstripGenToken) {
+                        videoFilmstrip.setFrames(result);
+                    }
+                });
+            }
+        });
+    }
+
     private void selectTool(int idx) {
         panelTrim.setVisibility(idx == 0 ? View.VISIBLE : View.GONE);
         panelRotate.setVisibility(idx == 1 ? View.VISIBLE : View.GONE);
@@ -431,7 +655,10 @@ public class VideoFragment extends Fragment {
         cardEmpty.setVisibility(empty ? View.VISIBLE : View.GONE);
         layoutWorkspace.setVisibility(empty ? View.GONE : View.VISIBLE);
         cardResult.setVisibility(View.GONE);
-        if (empty) return;
+        if (empty) {
+            releasePlayer();
+            return;
+        }
 
         clipAdapter.setSelectedIndex(activeClipIndex);
         btnStartExport.setText(clips.size() > 1
@@ -453,13 +680,7 @@ public class VideoFragment extends Fragment {
 
         isUpdatingUi = true;
         tvActiveClipName.setText((activeClipIndex + 1) + ". " + clip.displayName);
-
-        float totalSec = Math.max(1f, clip.durationMs / 1000f);
-        float sSec = Math.max(0f, Math.min(clip.trimStartMs / 1000f, totalSec - 0.5f));
-        float eSec = Math.max(sSec + 0.5f, Math.min(clip.trimEndMs / 1000f, totalSec));
-        rangeSlider.setValueFrom(0f);
-        rangeSlider.setValueTo(totalSec);
-        rangeSlider.setValues(sSec, eSec);
+        videoFilmstrip.setClipData(clip.durationMs, clip.trimStartMs, clip.trimEndMs);
 
         if (clip.extraRotateDeg == 90) chipGroupRotate.check(R.id.chipRot90);
         else if (clip.extraRotateDeg == 180) chipGroupRotate.check(R.id.chipRot180);
@@ -471,72 +692,50 @@ public class VideoFragment extends Fragment {
         isUpdatingUi = false;
 
         updateTrimLabels();
-        applyVisualPreviewTransform();
+        updateTimeReadout(clip.trimStartMs);
+        loadFilmstripFrames(clip);
 
-        try {
-            videoView.setVideoURI(clip.uri);
-            videoView.setOnPreparedListener(mp -> {
-                videoView.seekTo((int) clip.trimStartMs);
-                applyVisualPreviewTransform();
-            });
-            videoView.setOnCompletionListener(mp -> pauseVideoPreview());
-        } catch (Exception ignored) {
+        if (previewSurface != null) {
+            preparePlayerForClip(clip);
         }
+    }
+
+    private void updateTimeReadout(long currentMs) {
+        AudioUtils.VideoInfo clip = getActiveClip();
+        if (clip == null) return;
+        tvActiveTrimRange.setText(
+                AudioUtils.formatTimePreciseMs(currentMs) + "  /  " +
+                AudioUtils.formatTimePreciseMs(clip.durationMs)
+        );
     }
 
     private void updateTrimLabels() {
         AudioUtils.VideoInfo clip = getActiveClip();
         if (clip == null) return;
-        String s = AudioUtils.formatTimeMs(clip.trimStartMs);
-        String e = AudioUtils.formatTimeMs(clip.trimEndMs);
-        tvActiveTrimRange.setText(s + " — " + e);
-        tvVideoStart.setText("Начало: " + s);
-        tvVideoEnd.setText("Конец: " + e);
-        tvVideoDuration.setText("Длина: " + AudioUtils.formatTimeMs(clip.getEffectiveDurationMs()));
-    }
-
-    private void applyVisualPreviewTransform() {
-        AudioUtils.VideoInfo clip = getActiveClip();
-        if (videoView == null || clip == null) return;
-        videoView.setRotation(clip.extraRotateDeg);
-        videoView.setScaleX(clip.flipH ? -1f : 1f);
-        videoView.setScaleY(clip.flipV ? -1f : 1f);
-        if (clip.extraRotateDeg != 0 || clip.flipH || clip.flipV) {
-            StringBuilder b = new StringBuilder();
-            if (clip.extraRotateDeg != 0) b.append(clip.extraRotateDeg).append("°");
-            if (clip.flipH) { if (b.length() > 0) b.append(" "); b.append("↔"); }
-            if (clip.flipV) { if (b.length() > 0) b.append(" "); b.append("↕"); }
-            tvVideoPreviewBadge.setText(b.toString());
-            tvVideoPreviewBadge.setVisibility(View.VISIBLE);
-        } else {
-            tvVideoPreviewBadge.setVisibility(View.GONE);
-        }
+        tvVideoStart.setText("Начало: " + AudioUtils.formatTimePreciseMs(clip.trimStartMs));
+        tvVideoEnd.setText("Конец: " + AudioUtils.formatTimePreciseMs(clip.trimEndMs));
+        tvVideoDuration.setText("Длина: " + AudioUtils.formatTimePreciseMs(clip.getEffectiveDurationMs()));
     }
 
     private void nudgePlayhead(int deltaMs) {
         AudioUtils.VideoInfo clip = getActiveClip();
-        if (clip == null || videoView == null) return;
-        try {
-            int cur = videoView.getCurrentPosition();
-            int next = (int) Math.max(clip.trimStartMs, Math.min(clip.trimEndMs, cur + deltaMs));
-            videoView.seekTo(next);
-        } catch (Exception ignored) {
-        }
+        if (clip == null) return;
+        pauseVideoPreview();
+        long cur = videoFilmstrip.getPlayheadMs();
+        long next = Math.max(clip.trimStartMs, Math.min(clip.trimEndMs, cur + deltaMs));
+        videoFilmstrip.setPlayheadMs(next);
+        updateTimeReadout(next);
+        seekPlayerExact(next);
     }
 
     private void playClipEnding() {
         AudioUtils.VideoInfo clip = getActiveClip();
-        if (clip == null || videoView == null) return;
-        int jump = (int) Math.max(clip.trimStartMs, clip.trimEndMs - 5000L);
-        try {
-            videoView.seekTo(jump);
-            videoView.start();
-            isPlayingPreview = true;
-            btnCenterPlayPause.setImageResource(R.drawable.ic_pause);
-            btnQuickPlay.setText("Пауза");
-            handler.post(previewUpdater);
-        } catch (Exception ignored) {
-        }
+        if (clip == null || mediaPlayer == null || !isPlayerPrepared) return;
+        long jump = Math.max(clip.trimStartMs, clip.trimEndMs - 5000L);
+        videoFilmstrip.setPlayheadMs(jump);
+        updateTimeReadout(jump);
+        seekPlayerExact(jump);
+        startVideoPlayback();
     }
 
     private void toggleVideoPreview() {
@@ -545,16 +744,24 @@ public class VideoFragment extends Fragment {
             return;
         }
         AudioUtils.VideoInfo clip = getActiveClip();
-        if (clip == null) return;
+        if (clip == null || mediaPlayer == null || !isPlayerPrepared) return;
+        long cur = videoFilmstrip.getPlayheadMs();
+        if (cur < clip.trimStartMs || cur >= clip.trimEndMs - 150L) {
+            cur = clip.trimStartMs;
+            videoFilmstrip.setPlayheadMs(cur);
+            seekPlayerExact(cur);
+        }
+        startVideoPlayback();
+    }
+
+    private void startVideoPlayback() {
+        if (mediaPlayer == null || !isPlayerPrepared) return;
         try {
-            int cur = videoView.getCurrentPosition();
-            if (cur < clip.trimStartMs || cur >= clip.trimEndMs - 200) {
-                videoView.seekTo((int) clip.trimStartMs);
-            }
-            videoView.start();
+            mediaPlayer.start();
             isPlayingPreview = true;
             btnCenterPlayPause.setImageResource(R.drawable.ic_pause);
             btnQuickPlay.setText("Пауза");
+            handler.removeCallbacks(previewUpdater);
             handler.post(previewUpdater);
         } catch (Exception e) {
             Toast.makeText(getContext(), "Не удалось воспроизвести", Toast.LENGTH_SHORT).show();
@@ -564,9 +771,9 @@ public class VideoFragment extends Fragment {
     private void pauseVideoPreview() {
         isPlayingPreview = false;
         handler.removeCallbacks(previewUpdater);
-        if (videoView != null) {
+        if (mediaPlayer != null && isPlayerPrepared) {
             try {
-                if (videoView.isPlaying()) videoView.pause();
+                if (mediaPlayer.isPlaying()) mediaPlayer.pause();
             } catch (Exception ignored) {
             }
         }
@@ -605,7 +812,7 @@ public class VideoFragment extends Fragment {
             if (r == 1080) return new int[]{1080, 1350};
             if (r == 480) return new int[]{480, 600};
             return new int[]{720, 900};
-        } else { // 16:9 default
+        } else {
             if (r == 1080) return new int[]{1920, 1080};
             if (r == 480) return new int[]{854, 480};
             return new int[]{1280, 720};
@@ -733,7 +940,8 @@ public class VideoFragment extends Fragment {
                 && fAspect == ASPECT_ORIG
                 && fAudio == AUDIO_ORIG
                 && Math.abs(fSpeed - 1.0) < 0.01
-                && fRes == 0);
+                && fRes == 0
+                && !snapshot.get(0).isTrimmed());
 
         beginTaskUi("Сохранение видео", "Подготовка (" + snapshot.size() + " клип.)...");
 
@@ -760,11 +968,6 @@ public class VideoFragment extends Fragment {
                 args.add("-y");
 
                 if (singleFastCopy) {
-                    AudioUtils.VideoInfo c0 = snapshot.get(0);
-                    args.add("-ss");
-                    args.add(String.format(Locale.US, "%.2f", c0.trimStartMs / 1000.0));
-                    args.add("-t");
-                    args.add(String.format(Locale.US, "%.2f", c0.getEffectiveDurationMs() / 1000.0));
                     args.add("-i");
                     args.add(tempVids.get(0).getAbsolutePath());
                     args.add("-c");
@@ -776,9 +979,9 @@ public class VideoFragment extends Fragment {
                     for (int i = 0; i < snapshot.size(); i++) {
                         AudioUtils.VideoInfo c = snapshot.get(i);
                         args.add("-ss");
-                        args.add(String.format(Locale.US, "%.2f", c.trimStartMs / 1000.0));
+                        args.add(String.format(Locale.US, "%.3f", c.trimStartMs / 1000.0));
                         args.add("-t");
-                        args.add(String.format(Locale.US, "%.2f", c.getEffectiveDurationMs() / 1000.0));
+                        args.add(String.format(Locale.US, "%.3f", c.getEffectiveDurationMs() / 1000.0));
                         args.add("-i");
                         args.add(tempVids.get(i).getAbsolutePath());
                     }
@@ -1027,5 +1230,11 @@ public class VideoFragment extends Fragment {
     public void onHiddenChanged(boolean hidden) {
         super.onHiddenChanged(hidden);
         if (hidden) pauseVideoPreview();
+    }
+
+    @Override
+    public void onDestroyView() {
+        releasePlayer();
+        super.onDestroyView();
     }
 }
