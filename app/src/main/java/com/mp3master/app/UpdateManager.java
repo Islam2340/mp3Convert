@@ -50,7 +50,7 @@ public class UpdateManager {
 
                 int code = conn.getResponseCode();
                 if (code == 404) {
-                    postToast(activity, "Релизов на GitHub пока нет (обновите build.yml)");
+                    postToast(activity, "Релиз не найден. Проверьте: 1) репозиторий Public, 2) обновлён .github/workflows/build.yml");
                     return;
                 }
                 if (code != 200) {

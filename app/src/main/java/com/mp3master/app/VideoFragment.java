@@ -124,7 +124,7 @@ public class VideoFragment extends Fragment {
     private TextureView texturePreview;
     private VideoFilmstripView videoFilmstrip;
     private ImageButton btnCenterPlayPause;
-    private TextView tvActiveClipName, tvTotalTimelineDur, tvVideoPreviewBadge, tvActiveTrimRange;
+    private TextView tvActiveClipName, tvTotalTimelineDur, tvVideoPreviewBadge, tvActiveTrimRange, tvVideoZoomLabel;
     private TextView tvVideoStart, tvVideoDuration, tvVideoEnd, tvCustomAudioName, tvStatus, tvResultInfo;
     private ChipGroup chipGroupRotate;
     private MaterialSwitch switchFlipH, switchFlipV;
@@ -203,6 +203,7 @@ public class VideoFragment extends Fragment {
         tvTotalTimelineDur = view.findViewById(R.id.tvTotalTimelineDur);
         tvVideoPreviewBadge = view.findViewById(R.id.tvVideoPreviewBadge);
         tvActiveTrimRange = view.findViewById(R.id.tvActiveTrimRange);
+        tvVideoZoomLabel = view.findViewById(R.id.tvVideoZoomLabel);
 
         panelTrim = view.findViewById(R.id.panelTrim);
         panelRotate = view.findViewById(R.id.panelRotate);
@@ -307,25 +308,7 @@ public class VideoFragment extends Fragment {
         });
 
 
-        // Clip order / delete
-        view.findViewById(R.id.btnClipMoveLeft).setOnClickListener(v -> {
-            if (activeClipIndex > 0) {
-                pauseVideoPreview();
-                pushUndoState();
-                Collections.swap(clips, activeClipIndex, activeClipIndex - 1);
-                activeClipIndex--;
-                refreshWorkspace();
-            }
-        });
-        view.findViewById(R.id.btnClipMoveRight).setOnClickListener(v -> {
-            if (activeClipIndex < clips.size() - 1) {
-                pauseVideoPreview();
-                pushUndoState();
-                Collections.swap(clips, activeClipIndex, activeClipIndex + 1);
-                activeClipIndex++;
-                refreshWorkspace();
-            }
-        });
+        // Delete clip
         view.findViewById(R.id.btnClipRemove).setOnClickListener(v -> {
             if (!clips.isEmpty() && activeClipIndex >= 0 && activeClipIndex < clips.size()) {
                 deleteClipAt(activeClipIndex);
@@ -604,6 +587,27 @@ public class VideoFragment extends Fragment {
             }
 
             @Override
+            public void onClipMoved(int fromIndex, int toIndex) {
+                if (fromIndex >= 0 && fromIndex < clips.size() && toIndex >= 0 && toIndex < clips.size()) {
+                    pushUndoState();
+                    Collections.swap(clips, fromIndex, toIndex);
+                    activeClipIndex = toIndex;
+                    tvActiveClipName.setText((activeClipIndex + 1) + ". " + clips.get(activeClipIndex).displayName);
+                }
+            }
+
+            @Override
+            public void onScaleChanged(float secondsPerCm, boolean isFitAll) {
+                if (tvVideoZoomLabel != null) {
+                    if (isFitAll) {
+                        tvVideoZoomLabel.setText("Масштаб: весь");
+                    } else {
+                        tvVideoZoomLabel.setText(String.format(Locale.US, "Масштаб: %.1f с/см", secondsPerCm));
+                    }
+                }
+            }
+
+            @Override
             public void onTouchFinished() {
                 seekPlayerExact(videoFilmstrip.getPlayheadMs());
             }
@@ -869,6 +873,7 @@ public class VideoFragment extends Fragment {
     }
 
     private void startVideoPlayback() {
+        if (videoFilmstrip != null) videoFilmstrip.exitReorderMode();
         if (mediaPlayer == null || !isPlayerPrepared) return;
         try {
             mediaPlayer.start();
