@@ -3,6 +3,7 @@ package com.mp3master.app;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.database.Cursor;
 import android.media.MediaMetadataRetriever;
 import android.net.Uri;
@@ -12,6 +13,8 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
+
+import androidx.documentfile.provider.DocumentFile;
 
 import com.arthenica.ffmpegkit.FFmpegKit;
 import com.arthenica.ffmpegkit.ReturnCode;
@@ -28,6 +31,8 @@ import java.util.concurrent.Executors;
 
 public class AudioUtils {
 
+    private static final String PREFS_NAME = "mp3master_prefs";
+    private static final String KEY_SAVE_TREE_URI = "save_tree_uri";
     private static final ExecutorService waveformExecutor = Executors.newSingleThreadExecutor();
 
     public static class AudioInfo {
@@ -50,8 +55,67 @@ public class AudioUtils {
         }
     }
 
+    public static class SaveResult {
+        public final Uri uri;
+        public final String displayPath;
+
+        public SaveResult(Uri uri, String displayPath) {
+            this.uri = uri;
+            this.displayPath = displayPath;
+        }
+    }
+
     public interface WaveformCallback {
         void onWaveformReady(float[] peaks);
+    }
+
+    // --- Custom Save Folder (SAF) ---
+
+    public static void setSaveFolderUri(Context context, Uri treeUri) {
+        if (treeUri == null) return;
+        try {
+            int flags = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+            context.getContentResolver().takePersistableUriPermission(treeUri, flags);
+        } catch (Exception ignored) {
+        }
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        prefs.edit().putString(KEY_SAVE_TREE_URI, treeUri.toString()).apply();
+    }
+
+    public static void clearSaveFolderUri(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        prefs.edit().remove(KEY_SAVE_TREE_URI).apply();
+    }
+
+    public static Uri getSaveFolderUri(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        String raw = prefs.getString(KEY_SAVE_TREE_URI, null);
+        if (raw == null || raw.isEmpty()) return null;
+        return Uri.parse(raw);
+    }
+
+    public static String getSaveFolderDisplayName(Context context) {
+        Uri treeUri = getSaveFolderUri(context);
+        if (treeUri == null) {
+            return "Music/MP3Master";
+        }
+        try {
+            DocumentFile doc = DocumentFile.fromTreeUri(context, treeUri);
+            if (doc != null && doc.exists() && doc.canWrite()) {
+                String path = treeUri.getPath();
+                if (path != null && path.contains(":")) {
+                    String sub = path.substring(path.lastIndexOf(':') + 1);
+                    if (!sub.isEmpty()) {
+                        return sub;
+                    }
+                }
+                if (doc.getName() != null && !doc.getName().isEmpty()) {
+                    return doc.getName();
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return "Music/MP3Master";
     }
 
     public static AudioInfo getAudioInfo(Context context, Uri uri) {
@@ -238,12 +302,39 @@ public class AudioUtils {
         return outFile;
     }
 
-    public static Uri saveMp3ToMusic(Context context, File sourceFile, String outputBaseName) throws IOException {
-        String safeName = sanitizeFileName(outputBaseName, "output_" + System.currentTimeMillis());
-        if (!safeName.toLowerCase(Locale.US).endsWith(".mp3")) {
-            safeName = safeName + ".mp3";
+    public static SaveResult saveMp3Output(Context context, File sourceFile, String outputBaseName) throws IOException {
+        String safeBase = sanitizeFileName(stripExtension(outputBaseName), "output_" + System.currentTimeMillis());
+        String safeName = safeBase + ".mp3";
+
+        // 1. Try custom SAF folder if selected
+        Uri customTreeUri = getSaveFolderUri(context);
+        if (customTreeUri != null) {
+            DocumentFile folder = DocumentFile.fromTreeUri(context, customTreeUri);
+            if (folder != null && folder.exists() && folder.canWrite()) {
+                DocumentFile existing = folder.findFile(safeName);
+                String targetBase = safeBase;
+                if (existing != null) {
+                    targetBase = safeBase + "_" + (System.currentTimeMillis() % 10000);
+                }
+                DocumentFile created = folder.createFile("audio/mpeg", targetBase);
+                if (created != null) {
+                    try (InputStream in = new FileInputStream(sourceFile);
+                         OutputStream out = context.getContentResolver().openOutputStream(created.getUri())) {
+                        if (out == null) throw new IOException("Ошибка записи в выбранную папку");
+                        byte[] buf = new byte[16384];
+                        int len;
+                        while ((len = in.read(buf)) > 0) {
+                            out.write(buf, 0, len);
+                        }
+                    }
+                    String folderDisplay = getSaveFolderDisplayName(context);
+                    String actualName = created.getName() != null ? created.getName() : (targetBase + ".mp3");
+                    return new SaveResult(created.getUri(), folderDisplay + "/" + actualName);
+                }
+            }
         }
 
+        // 2. Fallback to Music/MP3Master
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             ContentValues values = new ContentValues();
             values.put(MediaStore.Audio.Media.DISPLAY_NAME, safeName);
@@ -269,7 +360,7 @@ public class AudioUtils {
             values.clear();
             values.put(MediaStore.Audio.Media.IS_PENDING, 0);
             context.getContentResolver().update(uri, values, null, null);
-            return uri;
+            return new SaveResult(uri, "Music/MP3Master/" + safeName);
         } else {
             File musicDir = new File(
                     Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
@@ -288,7 +379,7 @@ public class AudioUtils {
                     out.write(buf, 0, len);
                 }
             }
-            return Uri.fromFile(dest);
+            return new SaveResult(Uri.fromFile(dest), "Music/MP3Master/" + safeName);
         }
     }
 

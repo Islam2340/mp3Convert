@@ -10,12 +10,15 @@ import androidx.annotation.NonNull;
 import androidx.core.content.ContextCompat;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.google.android.material.button.MaterialButton;
+
 import java.util.List;
 
 public class MergeAdapter extends RecyclerView.Adapter<MergeAdapter.ViewHolder> {
 
     public interface OnItemActionListener {
         void onTrim(int position);
+        void onPreviewTransition(int position);
         void onMoveUp(int position);
         void onMoveDown(int position);
         void onRemove(int position);
@@ -23,10 +26,18 @@ public class MergeAdapter extends RecyclerView.Adapter<MergeAdapter.ViewHolder> 
 
     private final List<AudioUtils.AudioInfo> items;
     private final OnItemActionListener listener;
+    private int loadingTransitionIndex = -1;
+    private int playingTransitionIndex = -1;
 
     public MergeAdapter(List<AudioUtils.AudioInfo> items, OnItemActionListener listener) {
         this.items = items;
         this.listener = listener;
+    }
+
+    public void setTransitionState(int loadingIndex, int playingIndex) {
+        this.loadingTransitionIndex = loadingIndex;
+        this.playingTransitionIndex = playingIndex;
+        notifyDataSetChanged();
     }
 
     @NonNull
@@ -65,6 +76,28 @@ public class MergeAdapter extends RecyclerView.Adapter<MergeAdapter.ViewHolder> 
         holder.btnUp.setOnClickListener(v -> listener.onMoveUp(holder.getBindingAdapterPosition()));
         holder.btnDown.setOnClickListener(v -> listener.onMoveDown(holder.getBindingAdapterPosition()));
         holder.btnRemove.setOnClickListener(v -> listener.onRemove(holder.getBindingAdapterPosition()));
+
+        // Transition preview button between item `position` and `position + 1`
+        if (position < items.size() - 1) {
+            holder.btnPreviewTransition.setVisibility(View.VISIBLE);
+            String pairLabel = "(" + (position + 1) + " → " + (position + 2) + ")";
+            if (position == loadingTransitionIndex) {
+                holder.btnPreviewTransition.setEnabled(false);
+                holder.btnPreviewTransition.setText("Подготовка перехода " + pairLabel + "...");
+                holder.btnPreviewTransition.setIconResource(R.drawable.ic_play);
+            } else if (position == playingTransitionIndex) {
+                holder.btnPreviewTransition.setEnabled(true);
+                holder.btnPreviewTransition.setText("Стоп переход " + pairLabel);
+                holder.btnPreviewTransition.setIconResource(R.drawable.ic_pause);
+            } else {
+                holder.btnPreviewTransition.setEnabled(true);
+                holder.btnPreviewTransition.setText("Послушать переход " + pairLabel);
+                holder.btnPreviewTransition.setIconResource(R.drawable.ic_play);
+            }
+            holder.btnPreviewTransition.setOnClickListener(v -> listener.onPreviewTransition(holder.getBindingAdapterPosition()));
+        } else {
+            holder.btnPreviewTransition.setVisibility(View.GONE);
+        }
     }
 
     @Override
@@ -75,6 +108,7 @@ public class MergeAdapter extends RecyclerView.Adapter<MergeAdapter.ViewHolder> 
     static class ViewHolder extends RecyclerView.ViewHolder {
         TextView tvOrder, tvName, tvMeta;
         ImageButton btnTrim, btnUp, btnDown, btnRemove;
+        MaterialButton btnPreviewTransition;
 
         ViewHolder(@NonNull View itemView) {
             super(itemView);
@@ -85,6 +119,7 @@ public class MergeAdapter extends RecyclerView.Adapter<MergeAdapter.ViewHolder> 
             btnUp = itemView.findViewById(R.id.btnMoveUp);
             btnDown = itemView.findViewById(R.id.btnMoveDown);
             btnRemove = itemView.findViewById(R.id.btnRemoveItem);
+            btnPreviewTransition = itemView.findViewById(R.id.btnPreviewTransition);
         }
     }
 }

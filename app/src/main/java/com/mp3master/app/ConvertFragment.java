@@ -75,6 +75,9 @@ public class ConvertFragment extends Fragment {
             if (id == R.id.chip64) {
                 selectedBitrate = 64;
                 tvBitrateHint.setText("64 кбит/с — минимальный размер (подходит для речи и аудиокниг)");
+            } else if (id == R.id.chip96) {
+                selectedBitrate = 96;
+                tvBitrateHint.setText("96 кбит/с — компактный размер с хорошим качеством речи и музыки");
             } else if (id == R.id.chip128) {
                 selectedBitrate = 128;
                 tvBitrateHint.setText("128 кбит/с — оптимальный баланс размера и качества");
@@ -168,14 +171,14 @@ public class ConvertFragment extends Fragment {
                             if (ReturnCode.isSuccess(session.getReturnCode())) {
                                 try {
                                     long newSize = finalOutput.length();
-                                    Uri savedUri = AudioUtils.saveMp3ToMusic(requireContext(), finalOutput, finalOutputName);
-                                    lastSavedUri = savedUri;
+                                    AudioUtils.SaveResult res = AudioUtils.saveMp3Output(requireContext(), finalOutput, finalOutputName);
+                                    lastSavedUri = res.uri;
                                     requireActivity().runOnUiThread(() -> {
                                         layoutProgress.setVisibility(View.GONE);
                                         btnStartConvert.setEnabled(true);
                                         cardResult.setVisibility(View.VISIBLE);
                                         tvResultInfo.setText(
-                                                "Готово! Сохранено в Music/MP3Master/" + finalOutputName + ".mp3\n" +
+                                                "Готово! Сохранено в " + res.displayPath + "\n" +
                                                 "Размер: " + AudioUtils.formatSize(selectedAudio.sizeBytes) +
                                                 " → " + AudioUtils.formatSize(newSize) +
                                                 " (" + selectedBitrate + " кбит/с)"

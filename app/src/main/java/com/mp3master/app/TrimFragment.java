@@ -182,14 +182,14 @@ public class TrimFragment extends Fragment {
                             if (ReturnCode.isSuccess(session.getReturnCode())) {
                                 try {
                                     long newSize = finalOutput.length();
-                                    Uri savedUri = AudioUtils.saveMp3ToMusic(requireContext(), finalOutput, finalOutputName);
-                                    lastSavedUri = savedUri;
+                                    AudioUtils.SaveResult res = AudioUtils.saveMp3Output(requireContext(), finalOutput, finalOutputName);
+                                    lastSavedUri = res.uri;
                                     requireActivity().runOnUiThread(() -> {
                                         layoutProgress.setVisibility(View.GONE);
                                         btnStartTrim.setEnabled(true);
                                         cardResult.setVisibility(View.VISIBLE);
                                         tvResultInfo.setText(
-                                                "Готово! Сохранено в Music/MP3Master/" + finalOutputName + ".mp3\n" +
+                                                "Готово! Сохранено в " + res.displayPath + "\n" +
                                                 "Длительность: " + AudioUtils.formatTimePreciseMs(clipDurationMs) +
                                                 "  •  Размер: " + AudioUtils.formatSize(newSize)
                                         );

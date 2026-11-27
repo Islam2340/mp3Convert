@@ -2,7 +2,12 @@ package com.mp3master.app;
 
 import android.os.Bundle;
 import android.view.View;
+import android.widget.ImageButton;
+import android.widget.TextView;
+import android.widget.Toast;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -21,6 +26,18 @@ public class MainActivity extends AppCompatActivity {
     private Fragment mergeFragment;
     private Fragment activeFragment;
 
+    private TextView tvSaveFolderPath;
+    private ImageButton btnResetSaveFolder;
+
+    private final ActivityResultLauncher<android.net.Uri> pickFolderLauncher =
+            registerForActivityResult(new ActivityResultContracts.OpenDocumentTree(), uri -> {
+                if (uri != null) {
+                    AudioUtils.setSaveFolderUri(this, uri);
+                    updateSaveFolderBar();
+                    Toast.makeText(this, "Папка сохранения изменена", Toast.LENGTH_SHORT).show();
+                }
+            });
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -30,6 +47,8 @@ public class MainActivity extends AppCompatActivity {
         View root = findViewById(R.id.rootLayout);
         MaterialToolbar toolbar = findViewById(R.id.toolbar);
         BottomNavigationView bottomNav = findViewById(R.id.bottomNav);
+        tvSaveFolderPath = findViewById(R.id.tvSaveFolderPath);
+        btnResetSaveFolder = findViewById(R.id.btnResetSaveFolder);
 
         ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
@@ -37,6 +56,14 @@ public class MainActivity extends AppCompatActivity {
             bottomNav.setPadding(bottomNav.getPaddingLeft(), bottomNav.getPaddingTop(), bottomNav.getPaddingRight(), bars.bottom);
             return insets;
         });
+
+        findViewById(R.id.btnPickSaveFolder).setOnClickListener(v -> pickFolderLauncher.launch(null));
+        btnResetSaveFolder.setOnClickListener(v -> {
+            AudioUtils.clearSaveFolderUri(this);
+            updateSaveFolderBar();
+            Toast.makeText(this, "Возвращена папка по умолчанию", Toast.LENGTH_SHORT).show();
+        });
+        updateSaveFolderBar();
 
         FragmentManager fm = getSupportFragmentManager();
         if (savedInstanceState == null) {
@@ -85,6 +112,12 @@ public class MainActivity extends AppCompatActivity {
             }
             return false;
         });
+    }
+
+    private void updateSaveFolderBar() {
+        boolean hasCustom = AudioUtils.getSaveFolderUri(this) != null;
+        tvSaveFolderPath.setText("Папка: " + AudioUtils.getSaveFolderDisplayName(this));
+        btnResetSaveFolder.setVisibility(hasCustom ? View.VISIBLE : View.GONE);
     }
 
     private void switchFragment(Fragment target, String title) {
