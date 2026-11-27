@@ -33,6 +33,7 @@ public class AudioUtils {
 
     private static final String PREFS_NAME = "mp3master_prefs";
     private static final String KEY_SAVE_TREE_URI = "save_tree_uri";
+    private static final String KEY_DARK_THEME = "dark_theme_enabled";
     private static final ExecutorService waveformExecutor = Executors.newSingleThreadExecutor();
 
     public static class AudioInfo {
@@ -80,6 +81,16 @@ public class AudioUtils {
         }
         SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         prefs.edit().putString(KEY_SAVE_TREE_URI, treeUri.toString()).apply();
+    }
+
+    public static boolean isDarkTheme(Context context) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        return prefs.getBoolean(KEY_DARK_THEME, true);
+    }
+
+    public static void setDarkTheme(Context context, boolean dark) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        prefs.edit().putBoolean(KEY_DARK_THEME, dark).apply();
     }
 
     public static void clearSaveFolderUri(Context context) {

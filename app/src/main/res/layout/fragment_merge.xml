@@ -93,105 +93,55 @@
                 android:orientation="vertical"
                 android:padding="16dp">
 
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="2. Качество итогового файла"
-                    android:textColor="@color/text_primary"
-                    android:textSize="16sp"
-                    android:textStyle="bold" />
-
-                <com.google.android.material.chip.ChipGroup
-                    android:id="@+id/chipGroupMergeBitrate"
+                <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    app:selectionRequired="true"
-                    app:singleSelection="true">
+                    android:orientation="horizontal">
 
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chipMerge96"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
+                    <LinearLayout
+                        android:layout_width="0dp"
                         android:layout_height="wrap_content"
-                        android:text="96 кбит/с" />
+                        android:layout_marginEnd="6dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
 
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chipMerge128"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Качество"
+                            android:textColor="@color/text_primary"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
+
+                        <com.mp3master.app.DrumPickerView
+                            android:id="@+id/drumMergeBitrate"
+                            android:layout_width="match_parent"
+                            android:layout_height="120dp"
+                            android:layout_marginTop="6dp" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
                         android:layout_height="wrap_content"
-                        android:text="128 кбит/с" />
+                        android:layout_marginStart="6dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
 
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chipMerge192"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:checked="true"
-                        android:text="192 кбит/с" />
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Стык файлов"
+                            android:textColor="@color/text_primary"
+                            android:textSize="14sp"
+                            android:textStyle="bold" />
 
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chipMerge256"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="256 кбит/с" />
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chipMerge320"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="320 кбит/с" />
-                </com.google.android.material.chip.ChipGroup>
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="12dp"
-                    android:text="Стык между файлами"
-                    android:textColor="@color/text_primary"
-                    android:textSize="14sp"
-                    android:textStyle="bold" />
-
-                <com.google.android.material.chip.ChipGroup
-                    android:id="@+id/chipGroupMergeTransition"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp"
-                    app:selectionRequired="true"
-                    app:singleSelection="true">
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chipTransDirect"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:checked="true"
-                        android:text="Встык" />
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chipTransPause1"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Пауза 1с" />
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chipTransPause2"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Пауза 2с" />
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chipTransCrossfade"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="Кроссфейд 1.5с" />
-                </com.google.android.material.chip.ChipGroup>
+                        <com.mp3master.app.DrumPickerView
+                            android:id="@+id/drumMergeTransition"
+                            android:layout_width="match_parent"
+                            android:layout_height="120dp"
+                            android:layout_marginTop="6dp" />
+                    </LinearLayout>
+                </LinearLayout>
 
                 <com.google.android.material.textfield.TextInputLayout
                     style="@style/Widget.Material3.TextInputLayout.OutlinedBox"

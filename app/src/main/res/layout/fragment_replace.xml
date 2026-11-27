@@ -519,50 +519,11 @@
                     android:textSize="16sp"
                     android:textStyle="bold" />
 
-                <com.google.android.material.chip.ChipGroup
-                    android:id="@+id/chipGroupReplaceBitrate"
+                <com.mp3master.app.DrumPickerView
+                    android:id="@+id/drumReplaceBitrate"
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    app:selectionRequired="true"
-                    app:singleSelection="true">
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chipRep48"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="48 кбит/с" />
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chipRep64"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="64 кбит/с" />
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chipRep96"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="96 кбит/с" />
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chipRep128"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:checked="true"
-                        android:text="128 кбит/с" />
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chipRep192"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="192 кбит/с" />
-                </com.google.android.material.chip.ChipGroup>
+                    android:layout_height="124dp"
+                    android:layout_marginTop="8dp" />
 
                 <TextView
                     android:id="@+id/tvReplaceSizeHint"

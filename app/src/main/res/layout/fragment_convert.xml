@@ -94,57 +94,11 @@
                     android:textSize="16sp"
                     android:textStyle="bold" />
 
-                <com.google.android.material.chip.ChipGroup
-                    android:id="@+id/chipGroupConvertBitrate"
+                <com.mp3master.app.DrumPickerView
+                    android:id="@+id/drumConvertBitrate"
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    app:selectionRequired="true"
-                    app:singleSelection="true">
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chip64"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="64 кбит/с" />
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chip96"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="96 кбит/с" />
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chip128"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:checked="true"
-                        android:text="128 кбит/с" />
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chip192"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="192 кбит/с" />
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chip256"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="256 кбит/с" />
-
-                    <com.google.android.material.chip.Chip
-                        android:id="@+id/chip320"
-                        style="@style/Widget.Material3.Chip.Filter"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="320 кбит/с" />
-                </com.google.android.material.chip.ChipGroup>
+                    android:layout_height="128dp"
+                    android:layout_marginTop="10dp" />
 
                 <TextView
                     android:id="@+id/tvBitrateHint"

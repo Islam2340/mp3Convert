@@ -149,15 +149,11 @@ public class ReplaceFragment extends Fragment {
         view.findViewById(R.id.btnApplyReplace).setOnClickListener(v -> applyReplacement());
         btnUndo.setOnClickListener(v -> undoReplacement());
 
-        ChipGroup chipGroup = view.findViewById(R.id.chipGroupReplaceBitrate);
-        chipGroup.setOnCheckedStateChangeListener((group, checkedIds) -> {
-            if (checkedIds.isEmpty()) return;
-            int id = checkedIds.get(0);
-            if (id == R.id.chipRep48) selectedBitrate = 48;
-            else if (id == R.id.chipRep64) selectedBitrate = 64;
-            else if (id == R.id.chipRep96) selectedBitrate = 96;
-            else if (id == R.id.chipRep128) selectedBitrate = 128;
-            else if (id == R.id.chipRep192) selectedBitrate = 192;
+        DrumPickerView drumReplaceBitrate = view.findViewById(R.id.drumReplaceBitrate);
+        final int[] repBitrates = new int[]{48, 64, 96, 128, 192};
+        drumReplaceBitrate.setItems(new String[]{"48 кбит/с", "64 кбит/с", "96 кбит/с", "128 кбит/с", "192 кбит/с"}, 3);
+        drumReplaceBitrate.setOnValueChangedListener((idx, label) -> {
+            selectedBitrate = repBitrates[idx];
             updateSizeHint();
         });
 

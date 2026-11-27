@@ -12,6 +12,7 @@ import android.widget.Toast;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.appcompat.app.AppCompatDelegate;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
@@ -19,7 +20,6 @@ import androidx.core.view.WindowInsetsCompat;
 import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentManager;
 
-import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.bottomnavigation.BottomNavigationView;
 
 public class MainActivity extends AppCompatActivity {
@@ -31,6 +31,7 @@ public class MainActivity extends AppCompatActivity {
     private Fragment videoFragment;
     private Fragment activeFragment;
 
+    private TextView tvHeaderTitle;
     private TextView tvSaveFolderPath;
     private ImageButton btnResetSaveFolder;
 
@@ -48,21 +49,49 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        boolean isDark = AudioUtils.isDarkTheme(this);
+        AppCompatDelegate.setDefaultNightMode(
+                isDark ? AppCompatDelegate.MODE_NIGHT_YES : AppCompatDelegate.MODE_NIGHT_NO
+        );
         super.onCreate(savedInstanceState);
         WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
         setContentView(R.layout.activity_main);
 
         View root = findViewById(R.id.rootLayout);
-        MaterialToolbar toolbar = findViewById(R.id.toolbar);
+        View topHeaderBar = findViewById(R.id.topHeaderBar);
         BottomNavigationView bottomNav = findViewById(R.id.bottomNav);
+        tvHeaderTitle = findViewById(R.id.tvHeaderTitle);
         tvSaveFolderPath = findViewById(R.id.tvSaveFolderPath);
         btnResetSaveFolder = findViewById(R.id.btnResetSaveFolder);
 
+        final int origTopPad = topHeaderBar.getPaddingTop();
+        final int origBottomPad = bottomNav.getPaddingBottom();
+
         ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            toolbar.setPadding(toolbar.getPaddingLeft(), bars.top, toolbar.getPaddingRight(), toolbar.getPaddingBottom());
-            bottomNav.setPadding(bottomNav.getPaddingLeft(), bottomNav.getPaddingTop(), bottomNav.getPaddingRight(), bars.bottom);
+            topHeaderBar.setPadding(
+                    topHeaderBar.getPaddingLeft(),
+                    origTopPad + bars.top,
+                    topHeaderBar.getPaddingRight(),
+                    topHeaderBar.getPaddingBottom()
+            );
+            bottomNav.setPadding(
+                    bottomNav.getPaddingLeft(),
+                    bottomNav.getPaddingTop(),
+                    bottomNav.getPaddingRight(),
+                    origBottomPad + bars.bottom
+            );
             return insets;
+        });
+
+        ImageButton btnToggleTheme = findViewById(R.id.btnToggleTheme);
+        btnToggleTheme.setImageResource(isDark ? R.drawable.ic_theme_light : R.drawable.ic_theme_dark);
+        btnToggleTheme.setOnClickListener(v -> {
+            boolean nextDark = !AudioUtils.isDarkTheme(this);
+            AudioUtils.setDarkTheme(this, nextDark);
+            AppCompatDelegate.setDefaultNightMode(
+                    nextDark ? AppCompatDelegate.MODE_NIGHT_YES : AppCompatDelegate.MODE_NIGHT_NO
+            );
         });
 
         findViewById(R.id.btnPickSaveFolder).setOnClickListener(v -> pickFolderLauncher.launch(null));
@@ -72,6 +101,7 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(this, "Возвращена папка по умолчанию", Toast.LENGTH_SHORT).show();
         });
         updateSaveFolderBar();
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 requestNotificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS);
@@ -94,7 +124,7 @@ public class MainActivity extends AppCompatActivity {
                     .add(R.id.fragmentContainer, trimFragment, "trim").hide(trimFragment)
                     .add(R.id.fragmentContainer, convertFragment, "convert")
                     .commit();
-            toolbar.setTitle("Изменение качества MP3");
+            tvHeaderTitle.setText("Конвертация");
         } else {
             convertFragment = fm.findFragmentByTag("convert");
             trimFragment = fm.findFragmentByTag("trim");
@@ -109,38 +139,38 @@ public class MainActivity extends AppCompatActivity {
 
             if (!trimFragment.isHidden()) {
                 activeFragment = trimFragment;
-                toolbar.setTitle("Обрезка MP3");
+                tvHeaderTitle.setText("Обрезка MP3");
             } else if (!mergeFragment.isHidden()) {
                 activeFragment = mergeFragment;
-                toolbar.setTitle("Соединение MP3");
+                tvHeaderTitle.setText("Соединить");
             } else if (!replaceFragment.isHidden()) {
                 activeFragment = replaceFragment;
-                toolbar.setTitle("Замена фрагмента");
+                tvHeaderTitle.setText("Замена");
             } else if (!videoFragment.isHidden()) {
                 activeFragment = videoFragment;
-                toolbar.setTitle("Видеоредактор MP4");
+                tvHeaderTitle.setText("Видео MP4");
             } else {
                 activeFragment = convertFragment;
-                toolbar.setTitle("Изменение качества MP3");
+                tvHeaderTitle.setText("Конвертация");
             }
         }
 
         bottomNav.setOnItemSelectedListener(item -> {
             int id = item.getItemId();
             if (id == R.id.nav_convert) {
-                switchFragment(convertFragment, "Изменение качества MP3");
+                switchFragment(convertFragment, "Конвертация");
                 return true;
             } else if (id == R.id.nav_trim) {
                 switchFragment(trimFragment, "Обрезка MP3");
                 return true;
             } else if (id == R.id.nav_merge) {
-                switchFragment(mergeFragment, "Соединение MP3");
+                switchFragment(mergeFragment, "Соединить");
                 return true;
             } else if (id == R.id.nav_replace) {
-                switchFragment(replaceFragment, "Замена фрагмента");
+                switchFragment(replaceFragment, "Замена");
                 return true;
             } else if (id == R.id.nav_video) {
-                switchFragment(videoFragment, "Видеоредактор MP4");
+                switchFragment(videoFragment, "Видео MP4");
                 return true;
             }
             return false;
@@ -160,7 +190,6 @@ public class MainActivity extends AppCompatActivity {
                 .show(target)
                 .commit();
         activeFragment = target;
-        MaterialToolbar toolbar = findViewById(R.id.toolbar);
-        toolbar.setTitle(title);
+        tvHeaderTitle.setText(title);
     }
 }

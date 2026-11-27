@@ -24,7 +24,6 @@ import com.arthenica.ffmpegkit.FFmpegKit;
 import com.arthenica.ffmpegkit.ReturnCode;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.card.MaterialCardView;
-import com.google.android.material.chip.ChipGroup;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
 import com.google.android.material.textfield.TextInputEditText;
 
@@ -86,8 +85,11 @@ public class MergeFragment extends Fragment {
         btnClear = view.findViewById(R.id.btnClearMergeList);
         tvEmpty = view.findViewById(R.id.tvMergeEmpty);
         RecyclerView rv = view.findViewById(R.id.rvMergeFiles);
-        ChipGroup chipGroupBitrate = view.findViewById(R.id.chipGroupMergeBitrate);
-        ChipGroup chipGroupTransition = view.findViewById(R.id.chipGroupMergeTransition);
+        DrumPickerView drumBitrate = view.findViewById(R.id.drumMergeBitrate);
+        DrumPickerView drumTransition = view.findViewById(R.id.drumMergeTransition);
+        final int[] mergeBitrates = new int[]{96, 128, 192, 256, 320};
+        drumBitrate.setItems(new String[]{"96 кбит/с", "128 кбит/с", "192 кбит/с", "256 кбит/с", "320 кбит/с"}, 2);
+        drumTransition.setItems(new String[]{"Встык", "Пауза 1с", "Пауза 2с", "Кроссфейд 1.5с"}, 0);
         etOutputName = view.findViewById(R.id.etMergeOutputName);
         btnStartMerge = view.findViewById(R.id.btnStartMerge);
         btnCancelMerge = view.findViewById(R.id.btnCancelMerge);
@@ -151,24 +153,10 @@ public class MergeFragment extends Fragment {
             refreshListUi();
         });
 
-        chipGroupBitrate.setOnCheckedStateChangeListener((group, checkedIds) -> {
-            if (checkedIds.isEmpty()) return;
-            int id = checkedIds.get(0);
-            if (id == R.id.chipMerge96) selectedBitrate = 96;
-            else if (id == R.id.chipMerge128) selectedBitrate = 128;
-            else if (id == R.id.chipMerge192) selectedBitrate = 192;
-            else if (id == R.id.chipMerge256) selectedBitrate = 256;
-            else if (id == R.id.chipMerge320) selectedBitrate = 320;
-        });
-
-        chipGroupTransition.setOnCheckedStateChangeListener((group, checkedIds) -> {
-            if (checkedIds.isEmpty()) return;
+        drumBitrate.setOnValueChangedListener((idx, label) -> selectedBitrate = mergeBitrates[idx]);
+        drumTransition.setOnValueChangedListener((idx, label) -> {
             stopTransitionPreview();
-            int id = checkedIds.get(0);
-            if (id == R.id.chipTransDirect) selectedTransition = TRANS_DIRECT;
-            else if (id == R.id.chipTransPause1) selectedTransition = TRANS_PAUSE_1S;
-            else if (id == R.id.chipTransPause2) selectedTransition = TRANS_PAUSE_2S;
-            else if (id == R.id.chipTransCrossfade) selectedTransition = TRANS_CROSSFADE;
+            selectedTransition = idx;
         });
 
         btnStartMerge.setOnClickListener(v -> startMerge());

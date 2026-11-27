@@ -366,7 +366,7 @@
                             android:contentDescription="Обрезка"
                             android:padding="11dp"
                             android:src="@drawable/ic_cut"
-                            app:tint="#FFFFFF" />
+                            app:tint="@color/on_primary" />
 
                         <TextView
                             android:layout_width="wrap_content"
@@ -393,7 +393,7 @@
                             android:contentDescription="Поворот"
                             android:padding="11dp"
                             android:src="@drawable/ic_rotate"
-                            app:tint="#FFFFFF" />
+                            app:tint="@color/primary" />
 
                         <TextView
                             android:layout_width="wrap_content"
@@ -420,7 +420,7 @@
                             android:contentDescription="Формат"
                             android:padding="11dp"
                             android:src="@drawable/ic_aspect"
-                            app:tint="#FFFFFF" />
+                            app:tint="@color/primary" />
 
                         <TextView
                             android:layout_width="wrap_content"
@@ -447,7 +447,7 @@
                             android:contentDescription="Звук"
                             android:padding="11dp"
                             android:src="@drawable/ic_volume"
-                            app:tint="#FFFFFF" />
+                            app:tint="@color/primary" />
 
                         <TextView
                             android:layout_width="wrap_content"
@@ -474,7 +474,7 @@
                             android:contentDescription="Скорость"
                             android:padding="11dp"
                             android:src="@drawable/ic_speed"
-                            app:tint="#FFFFFF" />
+                            app:tint="@color/primary" />
 
                         <TextView
                             android:layout_width="wrap_content"
@@ -501,7 +501,7 @@
                             android:contentDescription="Качество"
                             android:padding="11dp"
                             android:src="@drawable/ic_quality"
-                            app:tint="#FFFFFF" />
+                            app:tint="@color/primary" />
 
                         <TextView
                             android:layout_width="wrap_content"
@@ -889,64 +889,11 @@
                             android:textSize="13sp"
                             android:textStyle="bold" />
 
-                        <HorizontalScrollView
+                        <com.mp3master.app.DrumPickerView
+                            android:id="@+id/drumVideoSpeed"
                             android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="6dp"
-                            android:scrollbars="none">
-
-                            <com.google.android.material.chip.ChipGroup
-                                android:id="@+id/chipGroupVideoSpeed"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                app:selectionRequired="true"
-                                app:singleLine="true"
-                                app:singleSelection="true">
-
-                                <com.google.android.material.chip.Chip
-                                    android:id="@+id/chipSpeed05"
-                                    style="@style/Widget.Material3.Chip.Filter"
-                                    android:layout_width="wrap_content"
-                                    android:layout_height="wrap_content"
-                                    android:text="0.5x" />
-
-                                <com.google.android.material.chip.Chip
-                                    android:id="@+id/chipSpeed075"
-                                    style="@style/Widget.Material3.Chip.Filter"
-                                    android:layout_width="wrap_content"
-                                    android:layout_height="wrap_content"
-                                    android:text="0.75x" />
-
-                                <com.google.android.material.chip.Chip
-                                    android:id="@+id/chipSpeed10"
-                                    style="@style/Widget.Material3.Chip.Filter"
-                                    android:layout_width="wrap_content"
-                                    android:layout_height="wrap_content"
-                                    android:checked="true"
-                                    android:text="1x" />
-
-                                <com.google.android.material.chip.Chip
-                                    android:id="@+id/chipSpeed125"
-                                    style="@style/Widget.Material3.Chip.Filter"
-                                    android:layout_width="wrap_content"
-                                    android:layout_height="wrap_content"
-                                    android:text="1.25x" />
-
-                                <com.google.android.material.chip.Chip
-                                    android:id="@+id/chipSpeed15"
-                                    style="@style/Widget.Material3.Chip.Filter"
-                                    android:layout_width="wrap_content"
-                                    android:layout_height="wrap_content"
-                                    android:text="1.5x" />
-
-                                <com.google.android.material.chip.Chip
-                                    android:id="@+id/chipSpeed20"
-                                    style="@style/Widget.Material3.Chip.Filter"
-                                    android:layout_width="wrap_content"
-                                    android:layout_height="wrap_content"
-                                    android:text="2x" />
-                            </com.google.android.material.chip.ChipGroup>
-                        </HorizontalScrollView>
+                            android:layout_height="120dp"
+                            android:layout_marginTop="6dp" />
                     </LinearLayout>
 
                     <!-- Panel 6: Quality & Output Name -->
@@ -965,43 +912,11 @@
                             android:textSize="13sp"
                             android:textStyle="bold" />
 
-                        <com.google.android.material.chip.ChipGroup
-                            android:id="@+id/chipGroupVideoRes"
+                        <com.mp3master.app.DrumPickerView
+                            android:id="@+id/drumVideoRes"
                             android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="6dp"
-                            app:selectionRequired="true"
-                            app:singleSelection="true">
-
-                            <com.google.android.material.chip.Chip
-                                android:id="@+id/chipResOrig"
-                                style="@style/Widget.Material3.Chip.Filter"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:checked="true"
-                                android:text="Исходное" />
-
-                            <com.google.android.material.chip.Chip
-                                android:id="@+id/chipRes1080"
-                                style="@style/Widget.Material3.Chip.Filter"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="1080p" />
-
-                            <com.google.android.material.chip.Chip
-                                android:id="@+id/chipRes720"
-                                style="@style/Widget.Material3.Chip.Filter"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="720p" />
-
-                            <com.google.android.material.chip.Chip
-                                android:id="@+id/chipRes480"
-                                style="@style/Widget.Material3.Chip.Filter"
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="480p" />
-                        </com.google.android.material.chip.ChipGroup>
+                            android:layout_height="120dp"
+                            android:layout_marginTop="6dp" />
 
                         <com.google.android.material.textfield.TextInputLayout
                             style="@style/Widget.Material3.TextInputLayout.OutlinedBox"

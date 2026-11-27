@@ -12,6 +12,7 @@ import android.view.MotionEvent;
 import android.view.View;
 
 import androidx.annotation.Nullable;
+import androidx.core.content.ContextCompat;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -56,20 +57,20 @@ public class VideoFilmstripView extends View {
 
     public VideoFilmstripView(Context context) {
         super(context);
-        init();
+        init(context);
     }
 
     public VideoFilmstripView(Context context, @Nullable AttributeSet attrs) {
         super(context, attrs);
-        init();
+        init(context);
     }
 
     public VideoFilmstripView(Context context, @Nullable AttributeSet attrs, int defStyleAttr) {
         super(context, attrs, defStyleAttr);
-        init();
+        init(context);
     }
 
-    private void init() {
+    private void init(Context context) {
         density = getResources().getDisplayMetrics().density;
         handleWidth = 16f * density;
         touchSlopRadius = 28f * density;
@@ -77,13 +78,13 @@ public class VideoFilmstripView extends View {
         bgPaint.setColor(Color.parseColor("#0F172A"));
         dimPaint.setColor(Color.parseColor("#B3050811"));
 
-        borderPaint.setColor(Color.parseColor("#F97316"));
+        borderPaint.setColor(ContextCompat.getColor(context, R.color.primary));
         borderPaint.setStyle(Paint.Style.STROKE);
         borderPaint.setStrokeWidth(3f * density);
 
-        handlePaint.setColor(Color.parseColor("#F97316"));
+        handlePaint.setColor(ContextCompat.getColor(context, R.color.primary));
 
-        gripPaint.setColor(Color.WHITE);
+        gripPaint.setColor(ContextCompat.getColor(context, R.color.on_primary));
         gripPaint.setStrokeWidth(2f * density);
         gripPaint.setStrokeCap(Paint.Cap.ROUND);
 

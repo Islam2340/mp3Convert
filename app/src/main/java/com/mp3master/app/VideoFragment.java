@@ -1,7 +1,9 @@
 package com.mp3master.app;
 
 import android.content.Context;
+import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
+import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.SurfaceTexture;
 import android.media.MediaMetadataRetriever;
@@ -24,6 +26,7 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
@@ -383,29 +386,17 @@ public class VideoFragment extends Fragment {
                 pickCustomAudioLauncher.launch(new String[]{"audio/mpeg", "audio/*"}));
         btnExtractMp3.setOnClickListener(v -> extractMp3FromActiveClip());
 
-        // Speed
-        ChipGroup speedGroup = view.findViewById(R.id.chipGroupVideoSpeed);
-        speedGroup.setOnCheckedStateChangeListener((g, ids) -> {
-            if (ids.isEmpty()) return;
-            int id = ids.get(0);
-            if (id == R.id.chipSpeed05) speedFactor = 0.5;
-            else if (id == R.id.chipSpeed075) speedFactor = 0.75;
-            else if (id == R.id.chipSpeed10) speedFactor = 1.0;
-            else if (id == R.id.chipSpeed125) speedFactor = 1.25;
-            else if (id == R.id.chipSpeed15) speedFactor = 1.5;
-            else if (id == R.id.chipSpeed20) speedFactor = 2.0;
-        });
+        // Speed drum
+        DrumPickerView drumSpeed = view.findViewById(R.id.drumVideoSpeed);
+        final double[] speeds = new double[]{0.5, 0.75, 1.0, 1.25, 1.5, 2.0};
+        drumSpeed.setItems(new String[]{"0.5x", "0.75x", "1x (обычная)", "1.25x", "1.5x", "2x"}, 2);
+        drumSpeed.setOnValueChangedListener((idx, label) -> speedFactor = speeds[idx]);
 
-        // Quality
-        ChipGroup resGroup = view.findViewById(R.id.chipGroupVideoRes);
-        resGroup.setOnCheckedStateChangeListener((g, ids) -> {
-            if (ids.isEmpty()) return;
-            int id = ids.get(0);
-            if (id == R.id.chipResOrig) targetRes = 0;
-            else if (id == R.id.chipRes1080) targetRes = 1080;
-            else if (id == R.id.chipRes720) targetRes = 720;
-            else if (id == R.id.chipRes480) targetRes = 480;
-        });
+        // Quality drum
+        DrumPickerView drumRes = view.findViewById(R.id.drumVideoRes);
+        final int[] resolutions = new int[]{0, 1080, 720, 480};
+        drumRes.setItems(new String[]{"Исходное", "1080p Full HD", "720p HD", "480p Компакт"}, 0);
+        drumRes.setOnValueChangedListener((idx, label) -> targetRes = resolutions[idx]);
 
         // Export & Cancel & Result
         btnStartExport.setOnClickListener(v -> startUnifiedExport());
@@ -637,12 +628,14 @@ public class VideoFragment extends Fragment {
         panelSpeed.setVisibility(idx == 4 ? View.VISIBLE : View.GONE);
         panelQuality.setVisibility(idx == 5 ? View.VISIBLE : View.GONE);
 
-        iconToolTrim.setBackgroundResource(idx == 0 ? R.drawable.bg_tool_circle_active : R.drawable.bg_tool_circle);
-        iconToolRotate.setBackgroundResource(idx == 1 ? R.drawable.bg_tool_circle_active : R.drawable.bg_tool_circle);
-        iconToolFormat.setBackgroundResource(idx == 2 ? R.drawable.bg_tool_circle_active : R.drawable.bg_tool_circle);
-        iconToolAudio.setBackgroundResource(idx == 3 ? R.drawable.bg_tool_circle_active : R.drawable.bg_tool_circle);
-        iconToolSpeed.setBackgroundResource(idx == 4 ? R.drawable.bg_tool_circle_active : R.drawable.bg_tool_circle);
-        iconToolQuality.setBackgroundResource(idx == 5 ? R.drawable.bg_tool_circle_active : R.drawable.bg_tool_circle);
+        ImageView[] icons = new ImageView[]{iconToolTrim, iconToolRotate, iconToolFormat, iconToolAudio, iconToolSpeed, iconToolQuality};
+        int primaryColor = ContextCompat.getColor(requireContext(), R.color.primary);
+        for (int i = 0; i < icons.length; i++) {
+            boolean active = (i == idx);
+            icons[i].setBackgroundResource(active ? R.drawable.bg_tool_circle_active : R.drawable.bg_tool_circle);
+            int onPrimaryColor = ContextCompat.getColor(requireContext(), R.color.on_primary);
+            icons[i].setImageTintList(ColorStateList.valueOf(active ? onPrimaryColor : primaryColor));
+        }
     }
 
     private AudioUtils.VideoInfo getActiveClip() {

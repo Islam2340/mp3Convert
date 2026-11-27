@@ -19,7 +19,6 @@ import com.arthenica.ffmpegkit.FFmpegKit;
 import com.arthenica.ffmpegkit.ReturnCode;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.card.MaterialCardView;
-import com.google.android.material.chip.ChipGroup;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
 import com.google.android.material.textfield.TextInputEditText;
 import com.google.android.material.textfield.TextInputLayout;
@@ -76,7 +75,18 @@ public class ConvertFragment extends Fragment {
         MaterialButton btnPick = view.findViewById(R.id.btnPickConvertFile);
         btnClear = view.findViewById(R.id.btnClearConvertFiles);
         tvFileInfo = view.findViewById(R.id.tvConvertFileInfo);
-        ChipGroup chipGroup = view.findViewById(R.id.chipGroupConvertBitrate);
+        DrumPickerView drumBitrate = view.findViewById(R.id.drumConvertBitrate);
+        final int[] bitrates = new int[]{64, 96, 128, 192, 256, 320};
+        final String[] bitrateLabels = new String[]{"64 кбит/с", "96 кбит/с", "128 кбит/с", "192 кбит/с", "256 кбит/с", "320 кбит/с"};
+        final String[] bitrateHints = new String[]{
+                "64 кбит/с — минимальный размер (для речи и аудиокниг)",
+                "96 кбит/с — компактный размер с хорошим качеством речи",
+                "128 кбит/с — оптимальный баланс размера и качества",
+                "192 кбит/с — хорошее качество для музыки",
+                "256 кбит/с — высокое качество звука",
+                "320 кбит/с — максимальное качество MP3"
+        };
+        drumBitrate.setItems(bitrateLabels, 2);
         tvBitrateHint = view.findViewById(R.id.tvBitrateHint);
         tilOutputName = view.findViewById(R.id.tilConvertOutputName);
         etOutputName = view.findViewById(R.id.etConvertOutputName);
@@ -98,28 +108,9 @@ public class ConvertFragment extends Fragment {
             updateFileUi();
         });
 
-        chipGroup.setOnCheckedStateChangeListener((group, checkedIds) -> {
-            if (checkedIds.isEmpty()) return;
-            int id = checkedIds.get(0);
-            if (id == R.id.chip64) {
-                selectedBitrate = 64;
-                tvBitrateHint.setText("64 кбит/с — минимальный размер (подходит для речи и аудиокниг)");
-            } else if (id == R.id.chip96) {
-                selectedBitrate = 96;
-                tvBitrateHint.setText("96 кбит/с — компактный размер с хорошим качеством речи и музыки");
-            } else if (id == R.id.chip128) {
-                selectedBitrate = 128;
-                tvBitrateHint.setText("128 кбит/с — оптимальный баланс размера и качества");
-            } else if (id == R.id.chip192) {
-                selectedBitrate = 192;
-                tvBitrateHint.setText("192 кбит/с — хорошее качество для музыки");
-            } else if (id == R.id.chip256) {
-                selectedBitrate = 256;
-                tvBitrateHint.setText("256 кбит/с — высокое качество звука");
-            } else if (id == R.id.chip320) {
-                selectedBitrate = 320;
-                tvBitrateHint.setText("320 кбит/с — максимальное качество MP3");
-            }
+        drumBitrate.setOnValueChangedListener((idx, label) -> {
+            selectedBitrate = bitrates[idx];
+            tvBitrateHint.setText(bitrateHints[idx]);
             updateOutputNameHints();
         });
 
