@@ -710,7 +710,7 @@ public class ReplaceFragment extends Fragment {
                 btnOrig.setOnClickListener(v -> playFragmentPreview(frag, false));
                 btnRow.addView(btnOrig, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-                MaterialButton btnRep = new MaterialButton(requireContext(), null, com.google.android.material.R.attr.materialButtonTonalStyle);
+                MaterialButton btnRep = new MaterialButton(requireContext());
                 btnRep.setText("С заменой");
                 btnRep.setTextSize(11f);
                 btnRep.setPadding(8, 0, 8, 0);
