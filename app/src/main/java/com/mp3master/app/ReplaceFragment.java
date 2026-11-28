@@ -35,7 +35,10 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
@@ -46,9 +49,24 @@ public class ReplaceFragment extends Fragment {
 
     private static final int SR = AudioReplaceEngine.SAMPLE_RATE;
 
+    private static class BatchFragment {
+        final String name;
+        final short[] pcm;
+        boolean found = false;
+        double startSec = 0.0;
+        double endSec = 0.0;
+        float score = 0f;
+        List<AudioReplaceEngine.Candidate> candidates = new ArrayList<>();
+
+        BatchFragment(String name, short[] pcm) {
+            this.name = name;
+            this.pcm = pcm;
+        }
+    }
+
     private short[] surahPcm = null;
     private short[] undoPcm = null;
-    private short[] fragPcm = null;
+    private final List<BatchFragment> fragments = new ArrayList<>();
     private float[] surahWavePeaks = null;
     private AudioReplaceEngine.FeatureSet surahFeat = null;
     private String surahBaseName = "ispravleno";
@@ -63,7 +81,7 @@ public class ReplaceFragment extends Fragment {
 
     private TextView tvSurahInfo, tvFragmentInfo, tvStatus, tvSizeHint, tvResultInfo;
     private TextView tvRepZoomLabel, tvRepWaveCursor;
-    private MaterialButton btnWordMode, btnFindPlace, btnUndo, btnSave, btnCancelReplace;
+    private MaterialButton btnWordMode, btnFindPlace, btnApplyReplace, btnUndo, btnSave, btnCancelReplace, btnClearFragments;
     private View layoutWordModeBox, layoutReplaceWave;
     private MaterialSwitch switchShowWave;
     private AudioTimelineView replaceTimeline;
@@ -81,9 +99,9 @@ public class ReplaceFragment extends Fragment {
             });
 
     private final ActivityResultLauncher<String[]> pickFragmentLauncher =
-            registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
-                if (uri != null && getContext() != null) {
-                    loadFragment(uri);
+            registerForActivityResult(new ActivityResultContracts.OpenMultipleDocuments(), uris -> {
+                if (uris != null && !uris.isEmpty() && getContext() != null) {
+                    loadFragments(uris);
                 }
             });
 
@@ -94,6 +112,7 @@ public class ReplaceFragment extends Fragment {
 
         tvSurahInfo = view.findViewById(R.id.tvSurahInfo);
         tvFragmentInfo = view.findViewById(R.id.tvFragmentInfo);
+        btnClearFragments = view.findViewById(R.id.btnClearFragments);
         btnWordMode = view.findViewById(R.id.btnWordMode);
         layoutWordModeBox = view.findViewById(R.id.layoutWordModeBox);
         etWordTime = view.findViewById(R.id.etWordTime);
@@ -111,6 +130,7 @@ public class ReplaceFragment extends Fragment {
         tvRepWaveCursor = view.findViewById(R.id.tvRepWaveCursor);
         chipGroupRepZoom = view.findViewById(R.id.chipGroupRepZoom);
         replaceTimeline = view.findViewById(R.id.replaceTimeline);
+        btnApplyReplace = view.findViewById(R.id.btnApplyReplace);
         btnUndo = view.findViewById(R.id.btnUndoReplace);
         tvSizeHint = view.findViewById(R.id.tvReplaceSizeHint);
         btnSave = view.findViewById(R.id.btnSaveReplace);
@@ -121,6 +141,13 @@ public class ReplaceFragment extends Fragment {
                 pickSurahLauncher.launch(new String[]{"audio/mpeg", "audio/*"}));
         view.findViewById(R.id.btnPickFragment).setOnClickListener(v ->
                 pickFragmentLauncher.launch(new String[]{"audio/mpeg", "audio/*"}));
+        btnClearFragments.setOnClickListener(v -> {
+            stopAudio();
+            fragments.clear();
+            layoutCandidates.removeAllViews();
+            updateFragmentInfoUi();
+            refreshButtons();
+        });
 
         btnWordMode.setOnClickListener(v -> {
             wordMode = !wordMode;
@@ -146,7 +173,7 @@ public class ReplaceFragment extends Fragment {
         view.findViewById(R.id.btnPlayOriginal).setOnClickListener(v -> playOriginal());
         view.findViewById(R.id.btnPlayReplaced).setOnClickListener(v -> playWithReplacement());
         view.findViewById(R.id.btnStopReplaceAudio).setOnClickListener(v -> stopAudio());
-        view.findViewById(R.id.btnApplyReplace).setOnClickListener(v -> applyReplacement());
+        btnApplyReplace.setOnClickListener(v -> applyReplacement());
         btnUndo.setOnClickListener(v -> undoReplacement());
 
         DrumPickerView drumReplaceBitrate = view.findViewById(R.id.drumReplaceBitrate);
@@ -324,31 +351,58 @@ public class ReplaceFragment extends Fragment {
         });
     }
 
-    private void loadFragment(Uri uri) {
+    private void loadFragments(List<Uri> uris) {
         stopAudio();
-        String name = AudioUtils.getFileName(requireContext(), uri);
-        tvFragmentInfo.setText("Загрузка: " + name + "…");
         btnFindPlace.setEnabled(false);
+        tvFragmentInfo.setText("Загрузка отрывков (" + uris.size() + " шт.)…");
         final Context appCtx = requireContext().getApplicationContext();
 
         executor.execute(() -> {
-            try {
-                short[] raw = decodeToMonoPcm(appCtx, uri, "rep_frag");
-                short[] trimmed = AudioReplaceEngine.trimSilence(raw, SR);
-                fragPcm = trimmed;
-                double sec = (double) trimmed.length / SR;
-                runUi(() -> {
-                    tvFragmentInfo.setText(name + "  •  " + AudioReplaceEngine.fmtSec(sec));
-                    refreshButtons();
-                });
-            } catch (Exception e) {
-                fragPcm = null;
-                runUi(() -> {
-                    tvFragmentInfo.setText("Не удалось прочитать файл");
-                    refreshButtons();
-                });
+            List<BatchFragment> loaded = new ArrayList<>();
+            for (int i = 0; i < uris.size(); i++) {
+                Uri uri = uris.get(i);
+                String name = AudioUtils.getFileName(appCtx, uri);
+                try {
+                    short[] raw = decodeToMonoPcm(appCtx, uri, "rep_frag_" + i);
+                    short[] trimmed = AudioReplaceEngine.trimSilence(raw, SR);
+                    if (trimmed.length > 0) {
+                        loaded.add(new BatchFragment(name, trimmed));
+                    }
+                } catch (Exception ignored) {
+                }
             }
+            runUi(() -> {
+                if (loaded.isEmpty()) {
+                    Toast.makeText(getContext(), "Не удалось прочитать выбранные отрывки", Toast.LENGTH_SHORT).show();
+                } else {
+                    fragments.addAll(loaded);
+                    layoutCandidates.removeAllViews();
+                }
+                updateFragmentInfoUi();
+                refreshButtons();
+            });
         });
+    }
+
+    private void updateFragmentInfoUi() {
+        int count = fragments.size();
+        btnClearFragments.setVisibility(count > 0 ? View.VISIBLE : View.GONE);
+        if (count == 0) {
+            tvFragmentInfo.setText("Файлы не выбраны");
+        } else if (count == 1) {
+            BatchFragment f = fragments.get(0);
+            tvFragmentInfo.setText(f.name + "  •  " + AudioReplaceEngine.fmtSec((double) f.pcm.length / SR));
+        } else {
+            StringBuilder sb = new StringBuilder("Загружено отрывков: ").append(count);
+            int limit = Math.min(count, 6);
+            for (int i = 0; i < limit; i++) {
+                BatchFragment f = fragments.get(i);
+                sb.append("\n").append(i + 1).append(". ").append(f.name)
+                  .append(" (").append(AudioReplaceEngine.fmtSec((double) f.pcm.length / SR)).append(")");
+            }
+            if (count > limit) sb.append("\n… и ещё ").append(count - limit);
+            tvFragmentInfo.setText(sb.toString());
+        }
     }
 
     private short[] decodeToMonoPcm(Context appCtx, Uri uri, String prefix) throws IOException {
@@ -393,7 +447,7 @@ public class ReplaceFragment extends Fragment {
     }
 
     private void startSearch() {
-        if (surahPcm == null || fragPcm == null || getContext() == null) return;
+        if (surahPcm == null || fragments.isEmpty() || getContext() == null) return;
         stopAudio();
         isCancelled.set(false);
         activeSessionId = -1;
@@ -404,89 +458,117 @@ public class ReplaceFragment extends Fragment {
         layoutCandidates.removeAllViews();
 
         final Context appCtx = requireContext().getApplicationContext();
-        final boolean isWord = wordMode;
+        final List<BatchFragment> snapshot = new ArrayList<>(fragments);
+        final int totalFrags = snapshot.size();
+        final boolean isWord = wordMode && totalFrags == 1;
         final String wordTimeStr = etWordTime.getText() != null ? etWordTime.getText().toString() : "";
         final String wordWinStr = etWordWindow.getText() != null ? etWordWindow.getText().toString() : "15";
 
-        AudioProcessingService.startTask(appCtx, "Поиск фрагмента", "Анализирую аудио...");
+        AudioProcessingService.startTask(appCtx, "Поиск фрагментов", "Анализирую аудио...");
 
         executor.execute(() -> {
             try {
                 if (surahFeat == null) {
-                    runUi(() -> setStatus("Анализирую суру…", 5));
-                    AudioProcessingService.updateProgress(appCtx, "Поиск фрагмента", "Анализирую суру...", 5, false);
+                    runUi(() -> setStatus("Анализирую основное аудио…", 5));
+                    AudioProcessingService.updateProgress(appCtx, "Поиск фрагментов", "Анализирую аудио...", 5, false);
                     surahFeat = AudioReplaceEngine.extractFeatures(surahPcm, SR);
                 }
                 if (isCancelled.get()) {
                     handleCancelledSearch(appCtx);
                     return;
                 }
-                runUi(() -> setStatus("Анализирую отрывок…", 10));
-                AudioReplaceEngine.FeatureSet featA = AudioReplaceEngine.extractFeatures(fragPcm, SR);
-                if (featA.n < 2) {
-                    throw new IllegalStateException("Отрывок слишком короткий.");
-                }
-
-                int j0 = 0;
-                int nB = surahFeat.n;
-                if (isWord) {
-                    Double ht = AudioReplaceEngine.parseTimeSec(wordTimeStr);
-                    if (ht != null) {
-                        double w = 15.0;
-                        try {
-                            w = Math.max(3.0, Double.parseDouble(wordWinStr.trim()));
-                        } catch (Exception ignored) {
-                        }
-                        j0 = Math.max(0, (int) Math.floor((ht - w) / surahFeat.hopT));
-                        int j1 = Math.min(surahFeat.n, (int) Math.ceil((ht + w) / surahFeat.hopT) + featA.n);
-                        if (j1 - j0 <= featA.n + 2) {
-                            throw new IllegalStateException("Указанное время вне суры.");
-                        }
-                        nB = j1 - j0;
-                    }
-                }
 
                 final long[] lastNotifMs = {0L};
-                AudioReplaceEngine.DtwResult dtwRes = AudioReplaceEngine.subsequenceDtw(
-                        featA.F, featA.n, surahFeat.F, j0, nB,
-                        frac -> {
-                            int pct = (int) (10 + frac * 88);
-                            String st = "Ищу место: " + Math.round(frac * 100) + "%";
-                            runUi(() -> setStatus(st, pct));
-                            long now = System.currentTimeMillis();
-                            if (now - lastNotifMs[0] > 500) {
-                                lastNotifMs[0] = now;
-                                AudioProcessingService.updateProgress(appCtx, "Поиск фрагмента", st, pct, false);
+                for (int fi = 0; fi < totalFrags; fi++) {
+                    if (isCancelled.get()) {
+                        handleCancelledSearch(appCtx);
+                        return;
+                    }
+                    BatchFragment frag = snapshot.get(fi);
+                    final int idx = fi;
+                    AudioReplaceEngine.FeatureSet featA = AudioReplaceEngine.extractFeatures(frag.pcm, SR);
+                    if (featA.n < 2) {
+                        frag.found = false;
+                        continue;
+                    }
+
+                    int j0 = 0;
+                    int nB = surahFeat.n;
+                    if (isWord) {
+                        Double ht = AudioReplaceEngine.parseTimeSec(wordTimeStr);
+                        if (ht != null) {
+                            double w = 15.0;
+                            try {
+                                w = Math.max(3.0, Double.parseDouble(wordWinStr.trim()));
+                            } catch (Exception ignored) {
                             }
-                        },
-                        isCancelled
-                );
+                            j0 = Math.max(0, (int) Math.floor((ht - w) / surahFeat.hopT));
+                            int j1 = Math.min(surahFeat.n, (int) Math.ceil((ht + w) / surahFeat.hopT) + featA.n);
+                            if (j1 - j0 > featA.n + 2) {
+                                nB = j1 - j0;
+                            }
+                        }
+                    }
 
-                if (dtwRes == null || isCancelled.get()) {
-                    handleCancelledSearch(appCtx);
-                    return;
+                    AudioReplaceEngine.DtwResult dtwRes = AudioReplaceEngine.subsequenceDtw(
+                            featA.F, featA.n, surahFeat.F, j0, nB,
+                            frac -> {
+                                double overall = (idx + frac) / totalFrags;
+                                int pct = (int) (8 + overall * 90);
+                                String st = totalFrags == 1
+                                        ? ("Ищу место: " + Math.round(frac * 100) + "%")
+                                        : ("Ищу " + (idx + 1) + " из " + totalFrags + " (" + frag.name + "): " + Math.round(frac * 100) + "%");
+                                runUi(() -> setStatus(st, pct));
+                                long now = System.currentTimeMillis();
+                                if (now - lastNotifMs[0] > 500) {
+                                    lastNotifMs[0] = now;
+                                    AudioProcessingService.updateProgress(appCtx, "Поиск фрагментов", st, pct, false);
+                                }
+                            },
+                            isCancelled
+                    );
+
+                    if (dtwRes == null || isCancelled.get()) {
+                        handleCancelledSearch(appCtx);
+                        return;
+                    }
+
+                    List<AudioReplaceEngine.Candidate> cands = AudioReplaceEngine.pickTopCandidates(
+                            dtwRes, j0, surahFeat, featA.n, surahPcm, SR, isWord
+                    );
+                    frag.candidates = cands;
+                    if (!cands.isEmpty()) {
+                        frag.found = true;
+                        frag.startSec = cands.get(0).startSec;
+                        frag.endSec = cands.get(0).endSec;
+                        frag.score = cands.get(0).score;
+                    } else {
+                        frag.found = false;
+                    }
                 }
-
-                List<AudioReplaceEngine.Candidate> cands = AudioReplaceEngine.pickTopCandidates(
-                        dtwRes, j0, surahFeat, featA.n, surahPcm, SR, isWord
-                );
-
-                boolean sure = cands.size() < 2 || (cands.get(1).score / Math.max(0.0001f, cands.get(0).score) > 1.1f);
-                String msg = sure
-                        ? "Нашёл. Проверьте на слух (можно подправить вручную или по волне)."
-                        : "Нашёл, но фраза похожа на другие места. Проверьте варианты.";
 
                 AudioProcessingService.stopTask(appCtx);
                 runUi(() -> {
                     btnCancelReplace.setVisibility(View.GONE);
-                    setStatus(msg, 100);
-                    renderCandidates(cands);
-                    if (!cands.isEmpty()) {
-                        etStart.setText(String.format(Locale.US, "%.2f", cands.get(0).startSec));
-                        etEnd.setText(String.format(Locale.US, "%.2f", cands.get(0).endSec));
-                        if (switchShowWave.isChecked()) {
-                            syncTimelineFromInputs(true);
+                    if (totalFrags == 1) {
+                        BatchFragment only = snapshot.get(0);
+                        List<AudioReplaceEngine.Candidate> cands = only.candidates;
+                        boolean sure = cands.size() < 2 || (cands.get(1).score / Math.max(0.0001f, cands.get(0).score) > 1.1f);
+                        String msg = sure
+                                ? "Нашёл. Проверьте на слух (можно подправить вручную или по волне)."
+                                : "Нашёл, но фраза похожа на другие места. Проверьте варианты.";
+                        setStatus(msg, 100);
+                        renderSingleCandidates(cands);
+                        if (!cands.isEmpty()) {
+                            etStart.setText(String.format(Locale.US, "%.2f", cands.get(0).startSec));
+                            etEnd.setText(String.format(Locale.US, "%.2f", cands.get(0).endSec));
+                            if (switchShowWave.isChecked()) {
+                                syncTimelineFromInputs(true);
+                            }
                         }
+                    } else {
+                        setStatus("Найдено отрывков: " + countFoundFragments() + " из " + fragments.size() + ". Послушайте каждый, лишние можно удалить.", 100);
+                        renderBatchResults();
                     }
                     refreshButtons();
                 });
@@ -501,6 +583,14 @@ public class ReplaceFragment extends Fragment {
         });
     }
 
+    private int countFoundFragments() {
+        int c = 0;
+        for (BatchFragment f : fragments) {
+            if (f.found) c++;
+        }
+        return c;
+    }
+
     private void handleCancelledSearch(Context appCtx) {
         AudioProcessingService.stopTask(appCtx);
         runUi(() -> {
@@ -511,7 +601,7 @@ public class ReplaceFragment extends Fragment {
         });
     }
 
-    private void renderCandidates(List<AudioReplaceEngine.Candidate> cands) {
+    private void renderSingleCandidates(List<AudioReplaceEngine.Candidate> cands) {
         layoutCandidates.removeAllViews();
         if (getContext() == null) return;
         float density = getResources().getDisplayMetrics().density;
@@ -563,6 +653,121 @@ public class ReplaceFragment extends Fragment {
         }
     }
 
+    private void renderBatchResults() {
+        layoutCandidates.removeAllViews();
+        if (getContext() == null) return;
+        float density = getResources().getDisplayMetrics().density;
+
+        for (int i = 0; i < fragments.size(); i++) {
+            final BatchFragment frag = fragments.get(i);
+            LinearLayout box = new LinearLayout(requireContext());
+            box.setOrientation(LinearLayout.VERTICAL);
+            box.setBackgroundColor(ContextCompat.getColor(requireContext(), R.color.surface_bg));
+            int pad = (int) (10 * density);
+            box.setPadding(pad, pad, pad, pad);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            );
+            lp.topMargin = (int) (8 * density);
+            box.setLayoutParams(lp);
+
+            TextView tvTitle = new TextView(requireContext());
+            tvTitle.setTextColor(ContextCompat.getColor(requireContext(), R.color.text_primary));
+            tvTitle.setTextSize(13.5f);
+            tvTitle.setTypeface(null, android.graphics.Typeface.BOLD);
+            tvTitle.setText((i + 1) + ". " + frag.name);
+            box.addView(tvTitle);
+
+            TextView tvSub = new TextView(requireContext());
+            tvSub.setTextColor(ContextCompat.getColor(requireContext(), R.color.text_secondary));
+            tvSub.setTextSize(12f);
+            if (frag.found) {
+                tvSub.setText(String.format(
+                        Locale.US,
+                        "Место: %s – %s  •  точность: %.2f",
+                        AudioReplaceEngine.fmtSec(frag.startSec),
+                        AudioReplaceEngine.fmtSec(frag.endSec),
+                        frag.score
+                ));
+            } else {
+                tvSub.setText("Место не найдено");
+            }
+            box.addView(tvSub);
+
+            LinearLayout btnRow = new LinearLayout(requireContext());
+            btnRow.setOrientation(LinearLayout.HORIZONTAL);
+            LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            );
+            rowLp.topMargin = (int) (6 * density);
+            btnRow.setLayoutParams(rowLp);
+
+            if (frag.found) {
+                MaterialButton btnOrig = new MaterialButton(requireContext(), null, com.google.android.material.R.attr.materialButtonOutlinedStyle);
+                btnOrig.setText("Оригинал");
+                btnOrig.setTextSize(11f);
+                btnOrig.setPadding(8, 0, 8, 0);
+                btnOrig.setOnClickListener(v -> playFragmentPreview(frag, false));
+                btnRow.addView(btnOrig, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+                MaterialButton btnRep = new MaterialButton(requireContext(), null, com.google.android.material.R.attr.materialButtonTonalStyle);
+                btnRep.setText("С заменой");
+                btnRep.setTextSize(11f);
+                btnRep.setPadding(8, 0, 8, 0);
+                LinearLayout.LayoutParams repLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                repLp.leftMargin = (int) (4 * density);
+                btnRep.setOnClickListener(v -> playFragmentPreview(frag, true));
+                btnRow.addView(btnRep, repLp);
+            }
+
+            MaterialButton btnDel = new MaterialButton(requireContext(), null, com.google.android.material.R.attr.borderlessButtonStyle);
+            btnDel.setText("Удалить");
+            btnDel.setTextSize(11f);
+            btnDel.setTextColor(ContextCompat.getColor(requireContext(), R.color.danger));
+            btnDel.setPadding(8, 0, 8, 0);
+            btnDel.setOnClickListener(v -> {
+                stopAudio();
+                fragments.remove(frag);
+                updateFragmentInfoUi();
+                if (fragments.size() > 1) {
+                    renderBatchResults();
+                } else {
+                    layoutCandidates.removeAllViews();
+                    if (fragments.size() == 1 && fragments.get(0).found) {
+                        etStart.setText(String.format(Locale.US, "%.2f", fragments.get(0).startSec));
+                        etEnd.setText(String.format(Locale.US, "%.2f", fragments.get(0).endSec));
+                        renderSingleCandidates(fragments.get(0).candidates);
+                    }
+                }
+                refreshButtons();
+                Toast.makeText(getContext(), "Отрывок убран из замены", Toast.LENGTH_SHORT).show();
+            });
+            btnRow.addView(btnDel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            box.addView(btnRow);
+            layoutCandidates.addView(box);
+        }
+    }
+
+    private void playFragmentPreview(BatchFragment frag, boolean withReplacement) {
+        if (surahPcm == null || !frag.found) return;
+        int a = Math.max(0, Math.min(surahPcm.length, (int) Math.floor(frag.startSec * SR)));
+        int b = Math.max(a, Math.min(surahPcm.length, (int) Math.floor(frag.endSec * SR)));
+        if (b <= a) return;
+
+        if (!withReplacement) {
+            int from = Math.max(0, a - SR * 2);
+            int to = Math.min(surahPcm.length, b + SR * 2);
+            playPcm(Arrays.copyOfRange(surahPcm, from, to));
+        } else {
+            short[] before = Arrays.copyOfRange(surahPcm, Math.max(0, a - SR * 2), a);
+            short[] matched = AudioReplaceEngine.matchVolume(surahPcm, a, b, frag.pcm);
+            short[] after = Arrays.copyOfRange(surahPcm, b, Math.min(surahPcm.length, b + SR * 2));
+            short[] preview = AudioReplaceEngine.joinWithCrossfade(Arrays.asList(before, matched, after), SR);
+            playPcm(preview);
+        }
+    }
+
     private int[] parseRange() {
         if (surahPcm == null) {
             setStatus("Сначала выберите файл суры.", null);
@@ -593,42 +798,100 @@ public class ReplaceFragment extends Fragment {
     }
 
     private void playWithReplacement() {
-        int[] r = parseRange();
-        if (r == null) return;
-        if (fragPcm == null) {
+        if (fragments.isEmpty()) {
             setStatus("Выберите исправленный отрывок.", null);
             return;
         }
+        int[] r = parseRange();
+        if (r == null) return;
         int a = r[0], b = r[1];
         short[] before = Arrays.copyOfRange(surahPcm, Math.max(0, a - SR * 2), a);
-        short[] matched = AudioReplaceEngine.matchVolume(surahPcm, a, b, fragPcm);
+        short[] matched = AudioReplaceEngine.matchVolume(surahPcm, a, b, fragments.get(0).pcm);
         short[] after = Arrays.copyOfRange(surahPcm, b, Math.min(surahPcm.length, b + SR * 2));
         short[] preview = AudioReplaceEngine.joinWithCrossfade(Arrays.asList(before, matched, after), SR);
         playPcm(preview);
     }
 
     private void applyReplacement() {
-        int[] r = parseRange();
-        if (r == null) return;
-        if (fragPcm == null) {
-            setStatus("Выберите исправленный отрывок.", null);
+        if (surahPcm == null || fragments.isEmpty()) {
+            setStatus("Выберите основное аудио и отрывки.", null);
             return;
         }
         stopAudio();
-        int a = r[0], b = r[1];
+
+        if (fragments.size() == 1) {
+            int[] r = parseRange();
+            if (r == null) return;
+            int a = r[0], b = r[1];
+            undoPcm = surahPcm;
+            short[] before = Arrays.copyOfRange(surahPcm, 0, a);
+            short[] matched = AudioReplaceEngine.matchVolume(surahPcm, a, b, fragments.get(0).pcm);
+            short[] after = Arrays.copyOfRange(surahPcm, b, surahPcm.length);
+            surahPcm = AudioReplaceEngine.joinWithCrossfade(Arrays.asList(before, matched, after), SR);
+            surahWavePeaks = AudioReplaceEngine.computeWaveformPeaks(surahPcm, 2400);
+            surahFeat = null;
+            cardResult.setVisibility(View.GONE);
+            layoutCandidates.removeAllViews();
+            if (switchShowWave.isChecked()) {
+                syncTimelineFromInputs(false);
+            }
+            setStatus("Заменено! Можно искать следующий отрывок или сохранить результат.", 0);
+            refreshButtons();
+            return;
+        }
+
+        // Batch apply all remaining found fragments in chronological order
+        List<BatchFragment> toApply = new ArrayList<>();
+        for (BatchFragment f : fragments) {
+            if (f.found) toApply.add(f);
+        }
+        if (toApply.isEmpty()) {
+            setStatus("Сначала нажмите «Найти все места».", null);
+            return;
+        }
+
+        Collections.sort(toApply, Comparator.comparingDouble(f -> f.startSec));
+
         undoPcm = surahPcm;
-        short[] before = Arrays.copyOfRange(surahPcm, 0, a);
-        short[] matched = AudioReplaceEngine.matchVolume(surahPcm, a, b, fragPcm);
-        short[] after = Arrays.copyOfRange(surahPcm, b, surahPcm.length);
-        surahPcm = AudioReplaceEngine.joinWithCrossfade(Arrays.asList(before, matched, after), SR);
+        List<short[]> parts = new ArrayList<>();
+        int cursor = 0;
+        int appliedCount = 0;
+
+        for (BatchFragment f : toApply) {
+            int a = Math.max(0, Math.min(surahPcm.length, (int) Math.floor(f.startSec * SR)));
+            int b = Math.max(a, Math.min(surahPcm.length, (int) Math.floor(f.endSec * SR)));
+            if (a < cursor || b <= a) {
+                continue;
+            }
+            if (a > cursor) {
+                parts.add(Arrays.copyOfRange(surahPcm, cursor, a));
+            }
+            parts.add(AudioReplaceEngine.matchVolume(surahPcm, a, b, f.pcm));
+            cursor = b;
+            appliedCount++;
+        }
+
+        if (cursor < surahPcm.length) {
+            parts.add(Arrays.copyOfRange(surahPcm, cursor, surahPcm.length));
+        }
+
+        if (appliedCount == 0) {
+            undoPcm = null;
+            setStatus("Не удалось применить замены.", 0);
+            return;
+        }
+
+        surahPcm = AudioReplaceEngine.joinWithCrossfade(parts, SR);
         surahWavePeaks = AudioReplaceEngine.computeWaveformPeaks(surahPcm, 2400);
         surahFeat = null;
+        fragments.clear();
+        updateFragmentInfoUi();
         cardResult.setVisibility(View.GONE);
         layoutCandidates.removeAllViews();
         if (switchShowWave.isChecked()) {
             syncTimelineFromInputs(false);
         }
-        setStatus("Заменено! Можно искать следующий отрывок или сохранить результат.", 0);
+        setStatus("Готово! Заменено отрывков: " + appliedCount + ". Теперь можно сохранить MP3.", 0);
         refreshButtons();
     }
 
@@ -828,7 +1091,17 @@ public class ReplaceFragment extends Fragment {
     }
 
     private void refreshButtons() {
-        btnFindPlace.setEnabled(surahPcm != null && fragPcm != null);
+        int count = fragments.size();
+        btnFindPlace.setEnabled(surahPcm != null && count > 0);
+        btnFindPlace.setText(count > 1 ? ("Найти все места (" + count + " шт.)") : "Найти место в суре");
+
+        if (count > 1) {
+            int found = countFoundFragments();
+            btnApplyReplace.setText("Заменить все (" + found + " шт.)");
+        } else {
+            btnApplyReplace.setText("Заменить");
+        }
+
         btnSave.setEnabled(surahPcm != null);
         btnUndo.setEnabled(undoPcm != null);
         btnCancelReplace.setEnabled(true);
