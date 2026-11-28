@@ -6,6 +6,8 @@ import android.media.AudioFormat;
 import android.media.AudioTrack;
 import android.net.Uri;
 import android.os.Bundle;
+import android.text.Editable;
+import android.text.TextWatcher;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -56,6 +58,7 @@ public class ReplaceFragment extends Fragment {
         double startSec = 0.0;
         double endSec = 0.0;
         float score = 0f;
+        int candIndex = 0;
         List<AudioReplaceEngine.Candidate> candidates = new ArrayList<>();
 
         BatchFragment(String name, short[] pcm) {
@@ -67,6 +70,8 @@ public class ReplaceFragment extends Fragment {
     private short[] surahPcm = null;
     private short[] undoPcm = null;
     private final List<BatchFragment> fragments = new ArrayList<>();
+    private int selectedBatchIndex = 0;
+    private boolean isUpdatingRangeInputs = false;
     private float[] surahWavePeaks = null;
     private AudioReplaceEngine.FeatureSet surahFeat = null;
     private String surahBaseName = "ispravleno";
@@ -79,7 +84,7 @@ public class ReplaceFragment extends Fragment {
     private final AtomicBoolean isCancelled = new AtomicBoolean(false);
     private volatile long activeSessionId = -1;
 
-    private TextView tvSurahInfo, tvFragmentInfo, tvStatus, tvSizeHint, tvResultInfo;
+    private TextView tvSurahInfo, tvFragmentInfo, tvStatus, tvSizeHint, tvResultInfo, tvEditingFragLabel;
     private TextView tvRepZoomLabel, tvRepWaveCursor;
     private MaterialButton btnWordMode, btnFindPlace, btnApplyReplace, btnUndo, btnSave, btnCancelReplace, btnClearFragments;
     private View layoutWordModeBox, layoutReplaceWave;
@@ -136,6 +141,7 @@ public class ReplaceFragment extends Fragment {
         btnSave = view.findViewById(R.id.btnSaveReplace);
         cardResult = view.findViewById(R.id.cardReplaceResult);
         tvResultInfo = view.findViewById(R.id.tvReplaceResultInfo);
+        tvEditingFragLabel = view.findViewById(R.id.tvEditingFragLabel);
 
         view.findViewById(R.id.btnPickSurah).setOnClickListener(v ->
                 pickSurahLauncher.launch(new String[]{"audio/mpeg", "audio/*"}));
@@ -144,6 +150,8 @@ public class ReplaceFragment extends Fragment {
         btnClearFragments.setOnClickListener(v -> {
             stopAudio();
             fragments.clear();
+            selectedBatchIndex = 0;
+            tvEditingFragLabel.setVisibility(View.GONE);
             layoutCandidates.removeAllViews();
             updateFragmentInfoUi();
             refreshButtons();
@@ -169,6 +177,17 @@ public class ReplaceFragment extends Fragment {
         });
 
         setupWaveformControls(view);
+        TextWatcher rangeWatcher = new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
+            @Override public void afterTextChanged(Editable s) {
+                if (!isUpdatingRangeInputs) {
+                    syncInputsBackToSelectedFragment();
+                }
+            }
+        };
+        etStart.addTextChangedListener(rangeWatcher);
+        etEnd.addTextChangedListener(rangeWatcher);
 
         view.findViewById(R.id.btnPlayOriginal).setOnClickListener(v -> playOriginal());
         view.findViewById(R.id.btnPlayReplaced).setOnClickListener(v -> playWithReplacement());
@@ -217,8 +236,11 @@ public class ReplaceFragment extends Fragment {
             @Override
             public void onTrimRangeChanged(long startMs, long endMs, boolean fromUser) {
                 if (fromUser) {
+                    isUpdatingRangeInputs = true;
                     etStart.setText(String.format(Locale.US, "%.2f", startMs / 1000.0));
                     etEnd.setText(String.format(Locale.US, "%.2f", endMs / 1000.0));
+                    isUpdatingRangeInputs = false;
+                    syncInputsBackToSelectedFragment();
                 }
             }
 
@@ -567,7 +589,9 @@ public class ReplaceFragment extends Fragment {
                             }
                         }
                     } else {
-                        setStatus("Найдено отрывков: " + countFoundFragments() + " из " + fragments.size() + ". Послушайте каждый, лишние можно удалить.", 100);
+                        selectedBatchIndex = 0;
+                        setStatus("Найдено отрывков: " + countFoundFragments() + " из " + fragments.size() + ". Нажмите «Подогнать» на любом, чтобы поправить границы.", 100);
+                        loadSelectedBatchFragmentToStep4(false);
                         renderBatchResults();
                     }
                     refreshButtons();
@@ -653,16 +677,76 @@ public class ReplaceFragment extends Fragment {
         }
     }
 
+    private BatchFragment getSelectedFragment() {
+        if (fragments.isEmpty()) return null;
+        if (selectedBatchIndex < 0 || selectedBatchIndex >= fragments.size()) {
+            selectedBatchIndex = 0;
+        }
+        return fragments.get(selectedBatchIndex);
+    }
+
+    private void loadSelectedBatchFragmentToStep4(boolean scrollWave) {
+        BatchFragment frag = getSelectedFragment();
+        if (frag == null) {
+            tvEditingFragLabel.setVisibility(View.GONE);
+            return;
+        }
+        if (fragments.size() > 1) {
+            tvEditingFragLabel.setText("Редактируется #" + (selectedBatchIndex + 1) + ": " + frag.name);
+            tvEditingFragLabel.setVisibility(View.VISIBLE);
+        } else {
+            tvEditingFragLabel.setVisibility(View.GONE);
+        }
+        isUpdatingRangeInputs = true;
+        if (frag.found) {
+            etStart.setText(String.format(Locale.US, "%.2f", frag.startSec));
+            etEnd.setText(String.format(Locale.US, "%.2f", frag.endSec));
+        } else {
+            etStart.setText("");
+            etEnd.setText("");
+        }
+        isUpdatingRangeInputs = false;
+        if (switchShowWave.isChecked()) {
+            syncTimelineFromInputs(scrollWave);
+        }
+    }
+
+    private void syncInputsBackToSelectedFragment() {
+        BatchFragment frag = getSelectedFragment();
+        if (frag == null || surahPcm == null) return;
+        try {
+            String sStr = etStart.getText() != null ? etStart.getText().toString().trim().replace(',', '.') : "";
+            String eStr = etEnd.getText() != null ? etEnd.getText().toString().trim().replace(',', '.') : "";
+            if (sStr.isEmpty() || eStr.isEmpty()) return;
+            double s = Double.parseDouble(sStr);
+            double e = Double.parseDouble(eStr);
+            double totalSec = (double) surahPcm.length / SR;
+            if (s >= 0 && e > s + 0.05 && e <= totalSec) {
+                frag.startSec = s;
+                frag.endSec = e;
+                frag.found = true;
+                if (fragments.size() > 1) {
+                    renderBatchResults();
+                }
+                refreshButtons();
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
     private void renderBatchResults() {
         layoutCandidates.removeAllViews();
         if (getContext() == null) return;
         float density = getResources().getDisplayMetrics().density;
 
         for (int i = 0; i < fragments.size(); i++) {
+            final int idx = i;
             final BatchFragment frag = fragments.get(i);
+            boolean isSelected = (i == selectedBatchIndex);
+
             LinearLayout box = new LinearLayout(requireContext());
             box.setOrientation(LinearLayout.VERTICAL);
-            box.setBackgroundColor(ContextCompat.getColor(requireContext(), R.color.surface_bg));
+            box.setBackgroundResource(isSelected ? R.drawable.bg_clip_selected : R.drawable.bg_clip_normal);
             int pad = (int) (10 * density);
             box.setPadding(pad, pad, pad, pad);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
@@ -670,30 +754,39 @@ public class ReplaceFragment extends Fragment {
             );
             lp.topMargin = (int) (8 * density);
             box.setLayoutParams(lp);
+            box.setOnClickListener(v -> {
+                selectedBatchIndex = idx;
+                loadSelectedBatchFragmentToStep4(true);
+                renderBatchResults();
+            });
 
             TextView tvTitle = new TextView(requireContext());
             tvTitle.setTextColor(ContextCompat.getColor(requireContext(), R.color.text_primary));
             tvTitle.setTextSize(13.5f);
             tvTitle.setTypeface(null, android.graphics.Typeface.BOLD);
-            tvTitle.setText((i + 1) + ". " + frag.name);
+            tvTitle.setText((i + 1) + ". " + frag.name + (isSelected ? "  (выбран)" : ""));
             box.addView(tvTitle);
 
             TextView tvSub = new TextView(requireContext());
             tvSub.setTextColor(ContextCompat.getColor(requireContext(), R.color.text_secondary));
             tvSub.setTextSize(12f);
             if (frag.found) {
+                String candNote = (frag.candidates.size() > 1)
+                        ? ("  •  вар. " + (frag.candIndex + 1) + "/" + frag.candidates.size())
+                        : "";
                 tvSub.setText(String.format(
                         Locale.US,
-                        "Место: %s – %s  •  точность: %.2f",
+                        "Место: %s – %s%s",
                         AudioReplaceEngine.fmtSec(frag.startSec),
                         AudioReplaceEngine.fmtSec(frag.endSec),
-                        frag.score
+                        candNote
                 ));
             } else {
-                tvSub.setText("Место не найдено");
+                tvSub.setText("Место не найдено (можно задать вручную ниже)");
             }
             box.addView(tvSub);
 
+            // Row 1: Оригинал | С заменой | Удалить
             LinearLayout btnRow = new LinearLayout(requireContext());
             btnRow.setOrientation(LinearLayout.HORIZONTAL);
             LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
@@ -728,14 +821,18 @@ public class ReplaceFragment extends Fragment {
             btnDel.setOnClickListener(v -> {
                 stopAudio();
                 fragments.remove(frag);
+                if (selectedBatchIndex >= fragments.size()) {
+                    selectedBatchIndex = Math.max(0, fragments.size() - 1);
+                }
                 updateFragmentInfoUi();
                 if (fragments.size() > 1) {
+                    loadSelectedBatchFragmentToStep4(false);
                     renderBatchResults();
                 } else {
                     layoutCandidates.removeAllViews();
+                    tvEditingFragLabel.setVisibility(View.GONE);
                     if (fragments.size() == 1 && fragments.get(0).found) {
-                        etStart.setText(String.format(Locale.US, "%.2f", fragments.get(0).startSec));
-                        etEnd.setText(String.format(Locale.US, "%.2f", fragments.get(0).endSec));
+                        loadSelectedBatchFragmentToStep4(false);
                         renderSingleCandidates(fragments.get(0).candidates);
                     }
                 }
@@ -743,8 +840,50 @@ public class ReplaceFragment extends Fragment {
                 Toast.makeText(getContext(), "Отрывок убран из замены", Toast.LENGTH_SHORT).show();
             });
             btnRow.addView(btnDel, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
-
             box.addView(btnRow);
+
+            // Row 2: Подогнать | Другой вариант (if >1 candidate)
+            LinearLayout editRow = new LinearLayout(requireContext());
+            editRow.setOrientation(LinearLayout.HORIZONTAL);
+            LinearLayout.LayoutParams editRowLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            );
+            editRowLp.topMargin = (int) (2 * density);
+            editRow.setLayoutParams(editRowLp);
+
+            MaterialButton btnTune = new MaterialButton(requireContext(), null, com.google.android.material.R.attr.borderlessButtonStyle);
+            btnTune.setText(isSelected ? "✓ В шаге 4 (подогнать)" : "Подогнать границы");
+            btnTune.setTextSize(11.5f);
+            btnTune.setPadding(6, 0, 6, 0);
+            btnTune.setOnClickListener(v -> {
+                selectedBatchIndex = idx;
+                loadSelectedBatchFragmentToStep4(true);
+                renderBatchResults();
+                Toast.makeText(getContext(), "Отрывок #" + (idx + 1) + " открыт в шаге 4 — поправьте секунды или волну", Toast.LENGTH_SHORT).show();
+            });
+            editRow.addView(btnTune, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            if (frag.candidates.size() > 1) {
+                MaterialButton btnNextCand = new MaterialButton(requireContext(), null, com.google.android.material.R.attr.borderlessButtonStyle);
+                btnNextCand.setText("Другой вариант");
+                btnNextCand.setTextSize(11.5f);
+                btnNextCand.setPadding(6, 0, 6, 0);
+                btnNextCand.setOnClickListener(v -> {
+                    frag.candIndex = (frag.candIndex + 1) % frag.candidates.size();
+                    AudioReplaceEngine.Candidate c = frag.candidates.get(frag.candIndex);
+                    frag.startSec = c.startSec;
+                    frag.endSec = c.endSec;
+                    frag.score = c.score;
+                    frag.found = true;
+                    selectedBatchIndex = idx;
+                    loadSelectedBatchFragmentToStep4(true);
+                    renderBatchResults();
+                    playFragmentPreview(frag, true);
+                });
+                editRow.addView(btnNextCand, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+            }
+
+            box.addView(editRow);
             layoutCandidates.addView(box);
         }
     }
@@ -806,7 +945,9 @@ public class ReplaceFragment extends Fragment {
         if (r == null) return;
         int a = r[0], b = r[1];
         short[] before = Arrays.copyOfRange(surahPcm, Math.max(0, a - SR * 2), a);
-        short[] matched = AudioReplaceEngine.matchVolume(surahPcm, a, b, fragments.get(0).pcm);
+        BatchFragment sel = getSelectedFragment();
+        if (sel == null) return;
+        short[] matched = AudioReplaceEngine.matchVolume(surahPcm, a, b, sel.pcm);
         short[] after = Arrays.copyOfRange(surahPcm, b, Math.min(surahPcm.length, b + SR * 2));
         short[] preview = AudioReplaceEngine.joinWithCrossfade(Arrays.asList(before, matched, after), SR);
         playPcm(preview);
